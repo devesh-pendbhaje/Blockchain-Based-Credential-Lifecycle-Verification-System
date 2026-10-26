@@ -1,0 +1,442 @@
+{
+  "environment": {
+    "platform": "Windows-10-10.0.26300-SP0",
+    "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "cpu_count": 20,
+    "python_version": "3.10.11",
+    "machine": "AMD64",
+    "timestamp_utc": "2026-10-25T12:16:27Z"
+  },
+  "composite_fingerprint": {
+    "benchmark": "Composite Fingerprint (6-input Keccak256)",
+    "stats": {
+      "iterations": 5000,
+      "mean_ms": 0.0174,
+      "median_ms": 0.0168,
+      "min_ms": 0.015,
+      "max_ms": 0.0942,
+      "p95_ms": 0.0206,
+      "p99_ms": 0.0292,
+      "ops_per_sec": 57469.41
+    }
+  },
+  "merkle_scaling": [
+    {
+      "leaf_count": 2,
+      "build_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0593,
+        "median_ms": 0.0566,
+        "min_ms": 0.0535,
+        "max_ms": 0.1872,
+        "p95_ms": 0.0713,
+        "p99_ms": 0.1338,
+        "ops_per_sec": 16865.11
+      },
+      "proof_gen_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0152,
+        "median_ms": 0.0149,
+        "min_ms": 0.0135,
+        "max_ms": 0.0237,
+        "p95_ms": 0.0169,
+        "p99_ms": 0.0201,
+        "ops_per_sec": 65997.89
+      },
+      "proof_verify_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0136,
+        "median_ms": 0.0134,
+        "min_ms": 0.0121,
+        "max_ms": 0.0193,
+        "p95_ms": 0.0154,
+        "p99_ms": 0.0187,
+        "ops_per_sec": 73337.98
+      }
+    },
+    {
+      "leaf_count": 4,
+      "build_stats": {
+        "iterations": 200,
+        "mean_ms": 0.1245,
+        "median_ms": 0.1227,
+        "min_ms": 0.1153,
+        "max_ms": 0.1863,
+        "p95_ms": 0.1349,
+        "p99_ms": 0.1468,
+        "ops_per_sec": 8034.06
+      },
+      "proof_gen_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0411,
+        "median_ms": 0.0404,
+        "min_ms": 0.0375,
+        "max_ms": 0.0645,
+        "p95_ms": 0.0454,
+        "p99_ms": 0.0497,
+        "ops_per_sec": 24341.56
+      },
+      "proof_verify_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0263,
+        "median_ms": 0.0258,
+        "min_ms": 0.0234,
+        "max_ms": 0.0404,
+        "p95_ms": 0.0298,
+        "p99_ms": 0.0357,
+        "ops_per_sec": 38014.86
+      }
+    },
+    {
+      "leaf_count": 8,
+      "build_stats": {
+        "iterations": 200,
+        "mean_ms": 0.2625,
+        "median_ms": 0.2573,
+        "min_ms": 0.2449,
+        "max_ms": 0.429,
+        "p95_ms": 0.2962,
+        "p99_ms": 0.4035,
+        "ops_per_sec": 3809.1
+      },
+      "proof_gen_stats": {
+        "iterations": 200,
+        "mean_ms": 0.094,
+        "median_ms": 0.0915,
+        "min_ms": 0.0859,
+        "max_ms": 0.1944,
+        "p95_ms": 0.1037,
+        "p99_ms": 0.1599,
+        "ops_per_sec": 10641.01
+      },
+      "proof_verify_stats": {
+        "iterations": 200,
+        "mean_ms": 0.04,
+        "median_ms": 0.0385,
+        "min_ms": 0.0348,
+        "max_ms": 0.1273,
+        "p95_ms": 0.044,
+        "p99_ms": 0.0796,
+        "ops_per_sec": 25009.69
+      }
+    },
+    {
+      "leaf_count": 16,
+      "build_stats": {
+        "iterations": 200,
+        "mean_ms": 0.556,
+        "median_ms": 0.5197,
+        "min_ms": 0.4828,
+        "max_ms": 0.9256,
+        "p95_ms": 0.7223,
+        "p99_ms": 0.8652,
+        "ops_per_sec": 1798.45
+      },
+      "proof_gen_stats": {
+        "iterations": 200,
+        "mean_ms": 0.2049,
+        "median_ms": 0.1926,
+        "min_ms": 0.182,
+        "max_ms": 0.4531,
+        "p95_ms": 0.2758,
+        "p99_ms": 0.3762,
+        "ops_per_sec": 4879.45
+      },
+      "proof_verify_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0543,
+        "median_ms": 0.0514,
+        "min_ms": 0.0479,
+        "max_ms": 0.1689,
+        "p95_ms": 0.0623,
+        "p99_ms": 0.1243,
+        "ops_per_sec": 18426.56
+      }
+    },
+    {
+      "leaf_count": 32,
+      "build_stats": {
+        "iterations": 200,
+        "mean_ms": 1.1167,
+        "median_ms": 1.0615,
+        "min_ms": 0.9672,
+        "max_ms": 2.0354,
+        "p95_ms": 1.3777,
+        "p99_ms": 2.0303,
+        "ops_per_sec": 895.48
+      },
+      "proof_gen_stats": {
+        "iterations": 200,
+        "mean_ms": 0.4275,
+        "median_ms": 0.4018,
+        "min_ms": 0.3656,
+        "max_ms": 0.9646,
+        "p95_ms": 0.5903,
+        "p99_ms": 0.8031,
+        "ops_per_sec": 2339.41
+      },
+      "proof_verify_stats": {
+        "iterations": 200,
+        "mean_ms": 0.071,
+        "median_ms": 0.0657,
+        "min_ms": 0.0575,
+        "max_ms": 0.3608,
+        "p95_ms": 0.0831,
+        "p99_ms": 0.1831,
+        "ops_per_sec": 14091.55
+      }
+    },
+    {
+      "leaf_count": 64,
+      "build_stats": {
+        "iterations": 200,
+        "mean_ms": 2.0873,
+        "median_ms": 2.0403,
+        "min_ms": 1.9544,
+        "max_ms": 2.7496,
+        "p95_ms": 2.3345,
+        "p99_ms": 2.6827,
+        "ops_per_sec": 479.09
+      },
+      "proof_gen_stats": {
+        "iterations": 200,
+        "mean_ms": 0.7888,
+        "median_ms": 0.7724,
+        "min_ms": 0.7337,
+        "max_ms": 1.1124,
+        "p95_ms": 0.9117,
+        "p99_ms": 0.9959,
+        "ops_per_sec": 1267.83
+      },
+      "proof_verify_stats": {
+        "iterations": 200,
+        "mean_ms": 0.0799,
+        "median_ms": 0.0759,
+        "min_ms": 0.0715,
+        "max_ms": 0.2576,
+        "p95_ms": 0.0935,
+        "p99_ms": 0.2156,
+        "ops_per_sec": 12520.27
+      }
+    }
+  ],
+  "canonicalization": {
+    "benchmark": "RFC 8785 JSON Canonicalization (JCS)",
+    "stats": {
+      "iterations": 1000,
+      "mean_ms": 0.0311,
+      "median_ms": 0.0246,
+      "min_ms": 0.0226,
+      "max_ms": 5.6531,
+      "p95_ms": 0.0299,
+      "p99_ms": 0.0488,
+      "ops_per_sec": 32119.23
+    }
+  },
+  "aes_gcm_throughput": [
+    {
+      "payload_size_bytes": 1024,
+      "payload_label": "1 KB",
+      "encryption_stats": {
+        "iterations": 50,
+        "mean_ms": 0.0027,
+        "median_ms": 0.0025,
+        "min_ms": 0.0024,
+        "max_ms": 0.0081,
+        "p95_ms": 0.0031,
+        "p99_ms": 0.0081,
+        "ops_per_sec": 372300.82
+      },
+      "encryption_throughput_mb_s": 363.58,
+      "decryption_stats": {
+        "iterations": 50,
+        "mean_ms": 0.003,
+        "median_ms": 0.0028,
+        "min_ms": 0.0026,
+        "max_ms": 0.0061,
+        "p95_ms": 0.0041,
+        "p99_ms": 0.0061,
+        "ops_per_sec": 338066.26
+      },
+      "decryption_throughput_mb_s": 330.14
+    },
+    {
+      "payload_size_bytes": 10240,
+      "payload_label": "10 KB",
+      "encryption_stats": {
+        "iterations": 50,
+        "mean_ms": 0.0084,
+        "median_ms": 0.0082,
+        "min_ms": 0.008,
+        "max_ms": 0.0138,
+        "p95_ms": 0.0089,
+        "p99_ms": 0.0138,
+        "ops_per_sec": 119189.51
+      },
+      "encryption_throughput_mb_s": 1163.96,
+      "decryption_stats": {
+        "iterations": 50,
+        "mean_ms": 0.0108,
+        "median_ms": 0.0103,
+        "min_ms": 0.0102,
+        "max_ms": 0.0269,
+        "p95_ms": 0.0122,
+        "p99_ms": 0.0269,
+        "ops_per_sec": 92936.8
+      },
+      "decryption_throughput_mb_s": 907.59
+    },
+    {
+      "payload_size_bytes": 102400,
+      "payload_label": "100 KB",
+      "encryption_stats": {
+        "iterations": 50,
+        "mean_ms": 0.0684,
+        "median_ms": 0.0651,
+        "min_ms": 0.0639,
+        "max_ms": 0.1301,
+        "p95_ms": 0.082,
+        "p99_ms": 0.1301,
+        "ops_per_sec": 14613.05
+      },
+      "encryption_throughput_mb_s": 1427.06,
+      "decryption_stats": {
+        "iterations": 50,
+        "mean_ms": 0.0872,
+        "median_ms": 0.0854,
+        "min_ms": 0.0847,
+        "max_ms": 0.1025,
+        "p95_ms": 0.0966,
+        "p99_ms": 0.1025,
+        "ops_per_sec": 11462.37
+      },
+      "decryption_throughput_mb_s": 1119.37
+    },
+    {
+      "payload_size_bytes": 1048576,
+      "payload_label": "1 MB",
+      "encryption_stats": {
+        "iterations": 50,
+        "mean_ms": 1.6201,
+        "median_ms": 1.609,
+        "min_ms": 1.511,
+        "max_ms": 1.836,
+        "p95_ms": 1.751,
+        "p99_ms": 1.836,
+        "ops_per_sec": 617.23
+      },
+      "encryption_throughput_mb_s": 617.23,
+      "decryption_stats": {
+        "iterations": 50,
+        "mean_ms": 1.6492,
+        "median_ms": 1.6448,
+        "min_ms": 1.5268,
+        "max_ms": 1.8513,
+        "p95_ms": 1.8094,
+        "p99_ms": 1.8513,
+        "ops_per_sec": 606.37
+      },
+      "decryption_throughput_mb_s": 606.37
+    },
+    {
+      "payload_size_bytes": 5242880,
+      "payload_label": "5 MB",
+      "encryption_stats": {
+        "iterations": 50,
+        "mean_ms": 9.0403,
+        "median_ms": 9.0051,
+        "min_ms": 8.3604,
+        "max_ms": 10.8627,
+        "p95_ms": 9.6828,
+        "p99_ms": 10.8627,
+        "ops_per_sec": 110.62
+      },
+      "encryption_throughput_mb_s": 553.08,
+      "decryption_stats": {
+        "iterations": 50,
+        "mean_ms": 8.7449,
+        "median_ms": 8.7655,
+        "min_ms": 8.188,
+        "max_ms": 9.6083,
+        "p95_ms": 9.3341,
+        "p99_ms": 9.6083,
+        "ops_per_sec": 114.35
+      },
+      "decryption_throughput_mb_s": 571.76
+    }
+  ],
+  "challenge_crypto": {
+    "nonce_generation_256bit": {
+      "iterations": 2000,
+      "mean_ms": 0.0005,
+      "median_ms": 0.0005,
+      "min_ms": 0.0004,
+      "max_ms": 0.0135,
+      "p95_ms": 0.0007,
+      "p99_ms": 0.0011,
+      "ops_per_sec": 1863932.9
+    },
+    "nonce_hmac_sha256_hash": {
+      "iterations": 2000,
+      "mean_ms": 0.0027,
+      "median_ms": 0.0021,
+      "min_ms": 0.0018,
+      "max_ms": 0.9238,
+      "p95_ms": 0.0024,
+      "p99_ms": 0.0035,
+      "ops_per_sec": 374377.6
+    },
+    "nonce_constant_time_verification": {
+      "iterations": 2000,
+      "mean_ms": 0.0023,
+      "median_ms": 0.0021,
+      "min_ms": 0.0019,
+      "max_ms": 0.0494,
+      "p95_ms": 0.0024,
+      "p99_ms": 0.0052,
+      "ops_per_sec": 443341.02
+    }
+  },
+  "live_api_endpoints": {
+    "public_verification_endpoint": {
+      "iterations": 25,
+      "mean_ms": 1041.8902,
+      "median_ms": 1250.1361,
+      "min_ms": 752.2253,
+      "max_ms": 1383.9633,
+      "p95_ms": 1355.1825,
+      "p99_ms": 1383.9633,
+      "ops_per_sec": 0.96
+    },
+    "challenge_issuance_endpoint": {
+      "iterations": 25,
+      "mean_ms": 16.2725,
+      "median_ms": 10.4949,
+      "min_ms": 9.6368,
+      "max_ms": 130.4322,
+      "p95_ms": 18.2373,
+      "p99_ms": 130.4322,
+      "ops_per_sec": 61.45
+    },
+    "merkle_build_tree_endpoint": {
+      "iterations": 25,
+      "mean_ms": 4.7332,
+      "median_ms": 4.4697,
+      "min_ms": 3.8382,
+      "max_ms": 6.7366,
+      "p95_ms": 6.3666,
+      "p99_ms": 6.7366,
+      "ops_per_sec": 211.27
+    },
+    "list_credentials_endpoint": {
+      "iterations": 25,
+      "mean_ms": 15.5928,
+      "median_ms": 14.7618,
+      "min_ms": 12.9092,
+      "max_ms": 28.5195,
+      "p95_ms": 20.4418,
+      "p99_ms": 28.5195,
+      "ops_per_sec": 64.13
+    }
+  }
+}

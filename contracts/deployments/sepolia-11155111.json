@@ -1,0 +1,37 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "deployer": "0xf549deD49E8084bA7f6789AedDeE130296711470",
+  "timestamp": "2026-10-19T09:52:52.267Z",
+  "blockNumber": 11947407,
+  "preflight": {
+    "totalGas": "16912191",
+    "expectedCostEth": "0.000000000287507247",
+    "conservativeCostEth": "0.00000000067648764",
+    "safetyMarginPercent": 25,
+    "feeOverrides": {
+      "maxFeePerGas": "32",
+      "maxPriorityFeePerGas": "2"
+    }
+  },
+  "contracts": {
+    "IssuerRegistry": {
+      "contractName": "IssuerRegistry",
+      "address": "0xfB70c98fC293E82CbBFf6F7f0088d653094deA82",
+      "transactionHash": "0xe5f46c98a09f2ee6fca1203db3e3f6600f6b64e19e40b5606b319d92ac283d4e",
+      "blockNumber": 11947406,
+      "constructorArguments": [
+        "0xf549deD49E8084bA7f6789AedDeE130296711470"
+      ]
+    },
+    "CredentialRegistry": {
+      "contractName": "CredentialRegistry",
+      "address": "0xD46360cBd97Eb6e3f6e1Dc9BEDA24838B1A69d6f",
+      "transactionHash": "0x804b8ce20f9c5bb352f699e2acb32a78cb3d8b8e0405afa9bdd8a9d5b7b78538",
+      "blockNumber": 11947407,
+      "constructorArguments": [
+        "0xfB70c98fC293E82CbBFf6F7f0088d653094deA82"
+      ]
+    }
+  }
+}

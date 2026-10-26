@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: credential_verification_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-credential_verification}
+    ports:
+      # Binds only to local loopback interface on port 5433 to avoid public exposure and port collisions
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-credential_verification}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - credential_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: credential_verification_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-credential_verification}
+      BLOCKCHAIN_RPC_URL: ${BLOCKCHAIN_RPC_URL:-http://host.docker.internal:8545}
+      BLOCKCHAIN_CHAIN_ID: ${BLOCKCHAIN_CHAIN_ID:-${CHAIN_ID:-11155111}}
+      CHAIN_ID: ${BLOCKCHAIN_CHAIN_ID:-${CHAIN_ID:-11155111}}
+      ISSUER_REGISTRY_ADDRESS: ${ISSUER_REGISTRY_ADDRESS:-}
+      CREDENTIAL_REGISTRY_ADDRESS: ${CREDENTIAL_REGISTRY_ADDRESS:-}
+      BLOCKCHAIN_SIGNER_PRIVATE_KEY: ${BLOCKCHAIN_SIGNER_PRIVATE_KEY:-}
+      BLOCKCHAIN_TIMEOUT_SECONDS: ${BLOCKCHAIN_TIMEOUT_SECONDS:-10.0}
+      STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      STORAGE_ROOT_DIR: /app/data/storage
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-10485760}
+      CHALLENGE_EXPIRY_SECONDS: ${CHALLENGE_EXPIRY_SECONDS:-300}
+      AUTH_MODE: ${AUTH_MODE:-oidc}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-https://auth.institutional-consortium.org/realms/credentials}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-blockchain-credential-api}
+      AUTH_DEV_PUBLIC_KEY: ${AUTH_DEV_PUBLIC_KEY:-}
+      AUTH_DEV_PRIVATE_KEY: ${AUTH_DEV_PRIVATE_KEY:-}
+    volumes:
+      - certificate_storage:/app/data/storage
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - credential_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    container_name: credential_verification_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
+    networks:
+      - credential_network
+
+volumes:
+  postgres_data:
+    driver: local
+  certificate_storage:
+    driver: local
+
+networks:
+  credential_network:
+    driver: bridge
