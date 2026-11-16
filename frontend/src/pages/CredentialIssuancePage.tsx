@@ -1,7 +1,7 @@
 import { holderPackages, encryptPackage, downloadText } from '@/services/holderPackages';
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
+import { useForm, FieldErrors } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   FilePlus,
@@ -91,6 +91,28 @@ export const CredentialIssuancePage: React.FC = () => {
   const [issuanceResult, setIssuanceResult] = useState<CredentialResponse | null>(null);
   const [issuanceError, setIssuanceError] = useState<AppError | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [validationNotice, setValidationNotice] = useState('');
+  const validationRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (validationNotice) {
+      validationRef.current?.focus();
+      validationRef.current?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }
+  }, [validationNotice]);
+
+  const handleInvalidSubmit = (invalid: FieldErrors<CredentialCreateFormValues>) => {
+    const fields: [keyof CredentialCreateFormValues, number][] = [
+      ['credential_id', 1], ['issuer_id', 1], ['version', 1], ['expires_at', 1],
+      ['idempotency_key', 1], ['document_digest', 2], ['metadata_digest', 3], ['merkle_root', 4],
+    ];
+    const first = fields.find(([field]) => invalid[field]);
+    setShowConfirm(false);
+    if (first) {
+      setCurrentStep(first[1]);
+      setValidationNotice(`Cannot issue credential. Step ${first[1]}: ${invalid[first[0]]?.message}. Correct this field, then return to Review & Issue.`);
+    }
+  };
 
   const {
     register,
@@ -492,7 +514,15 @@ export const CredentialIssuancePage: React.FC = () => {
           </div>
 
           {/* Form Content per Step */}
-          <form onSubmit={handleSubmit(() => setShowConfirm(true))} className="space-y-6">
+          <form noValidate onSubmit={handleSubmit(() => {
+            setValidationNotice('');
+            setShowConfirm(true);
+          }, handleInvalidSubmit)} className="space-y-6">
+            {validationNotice && (
+              <div ref={validationRef} role="alert" tabIndex={-1} className="p-4 rounded-lg border border-rose-700 bg-rose-950/40 text-rose-200 text-sm">
+                {validationNotice}
+              </div>
+            )}
             {/* Step 1: Identifiers */}
             {currentStep === 1 && (
               <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 space-y-5 animate-in fade-in">
@@ -519,7 +549,7 @@ export const CredentialIssuancePage: React.FC = () => {
                   <FormField
                     label="Issuing Authority ID (32-byte Hex)"
                     required
-                    description="Identifier of the accredited issuer from the Issuer Registry."
+                    description="Enter an existing registered issuer ID. Administrators must choose the issuer explicitly; signing in as an issuer fills its ID automatically."
                     error={errors.issuer_id?.message}
                   >
                     <Bytes32Input
@@ -918,7 +948,7 @@ export const CredentialIssuancePage: React.FC = () => {
             description="You are about to register a new verifiable credential. The backend will compute the authoritative composite fingerprint and persist the lifecycle record."
             confirmLabel="Confirm & Issue"
             isLoading={isSubmitting}
-            onConfirm={handleSubmit(onFinalSubmit)}
+            onConfirm={handleSubmit(onFinalSubmit, handleInvalidSubmit)}
             onCancel={() => setShowConfirm(false)}
           />
         </div>
