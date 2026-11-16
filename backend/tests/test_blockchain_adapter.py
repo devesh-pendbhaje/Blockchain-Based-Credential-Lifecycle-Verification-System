@@ -266,6 +266,9 @@ def test_mocked_contract_credential_anchoring_success():
         chain_id=31337,
         signer_private_key=test_key,
     )
+    client.verify_signer_authorized_for_issuer = MagicMock(return_value=(True, None))
+    client.signer_account = MagicMock()
+    client.signer_account.sign_transaction.return_value.raw_transaction = b"signed-local-test-transaction"
     client.w3 = MagicMock()
     client.w3.is_connected.return_value = True
     client.w3.eth.chain_id = 31337
@@ -299,7 +302,7 @@ def test_mocked_contract_credential_anchoring_success():
 
     # Mock event parsing
     expected_fp = "0x" + "77" * 32
-    mock_event = {"args": {"fingerprint": bytes.fromhex("77" * 32)}}
+    mock_event = {"args": {"fingerprint": bytes.fromhex("77" * 32), "issuerId": bytes.fromhex("11" * 32)}}
     mock_contract.events.CredentialIssued().process_receipt.return_value = [mock_event]
 
     res = client.anchor_credential_fingerprint(
@@ -326,6 +329,9 @@ def test_mocked_contract_credential_anchoring_reverted():
         chain_id=31337,
         signer_private_key=test_key,
     )
+    client.verify_signer_authorized_for_issuer = MagicMock(return_value=(True, None))
+    client.signer_account = MagicMock()
+    client.signer_account.sign_transaction.return_value.raw_transaction = b"signed-local-test-transaction"
     client.w3 = MagicMock()
     client.w3.is_connected.return_value = True
     client.w3.eth.chain_id = 31337
@@ -422,6 +428,9 @@ def test_privacy_invariants_no_pii_sent_to_contract():
     client.has_contract_code = MagicMock(return_value=True)
     client.is_connected = MagicMock(return_value=True)
     client.get_connected_chain_id = MagicMock(return_value=31337)
+    client.verify_signer_authorized_for_issuer = MagicMock(return_value=(True, None))
+    client.signer_account = MagicMock()
+    client.signer_account.sign_transaction.return_value.raw_transaction = b"signed-local-test-transaction"
     client.w3 = MagicMock()
     client.w3.eth.gas_price = 1000000000
     client.w3.eth.get_transaction_count.return_value = 0
@@ -555,10 +564,13 @@ def test_reconciliation_detects_already_anchored_record(db_session, admin_header
     with patch.object(
         blockchain_client,
         "get_credential_record_on_chain",
-        return_value={"issued_at": 1700000000, "status": "ACTIVE", "fingerprint": fp},
+        return_value={"issued_at": 1700000000, "status": "ACTIVE", "fingerprint": fp,
+                      "issuer_id": issuer_id, "credential_id": cred_id, "version": 1,
+                      "document_digest": ver.document_digest, "metadata_digest": ver.metadata_digest,
+                      "merkle_root": ver.merkle_root, "expires_at": 0},
     ):
         service = CredentialService(db_session)
-        resp = service.reconcile_and_anchor_credential(cred_id, 1)
+        resp = service.reconcile_and_anchor_credential(cred_id, 1, principal=__import__("app.core.auth.models", fromlist=["AuthenticatedPrincipal"]).AuthenticatedPrincipal(subject="test", roles=["admin"]))
 
     assert resp.issuance_status == "CONFIRMED"
     updated_ver = db_session.query(CredentialVersion).filter_by(credential_id=cred_id, version=1).first()

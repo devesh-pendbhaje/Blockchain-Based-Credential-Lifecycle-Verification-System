@@ -1,7 +1,7 @@
 import uuid
 import json
 from datetime import datetime, timezone
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 from app.core.config import settings
 from app.core.exceptions import AppException
 from app.storage.encryption import EnvelopeEncryption
@@ -18,10 +18,21 @@ class CertificateStorageService:
         self,
         encryption_key_hex: Optional[str] = None,
         storage_root_dir: Optional[str] = None,
+        previous_keys_hex: Optional[List[str]] = None,
     ):
         key_hex = encryption_key_hex or settings.STORAGE_ENCRYPTION_KEY
         key_bytes = bytes.fromhex(key_hex)
         self.encryptor = EnvelopeEncryption(key_bytes)
+
+        # Fallback encryptors for key rotation
+        prev_keys = previous_keys_hex if previous_keys_hex is not None else settings.STORAGE_PREVIOUS_ENCRYPTION_KEYS
+        self.fallback_encryptors = []
+        for k in prev_keys:
+            if k and k.strip():
+                try:
+                    self.fallback_encryptors.append(EnvelopeEncryption(bytes.fromhex(k.strip())))
+                except Exception:
+                    pass
 
         root_dir = storage_root_dir or settings.STORAGE_ROOT_DIR
         self.adapter = EncryptedFilesystemStorage(root_dir)
@@ -69,6 +80,7 @@ class CertificateStorageService:
     def retrieve_certificate(self, storage_id: str) -> Tuple[bytes, Dict[str, Any]]:
         """
         Retrieves and decrypts certificate for authorized operations.
+        Supports key rotation: attempts primary key first, then fallback keys.
         Zero plaintext exposure on tag or AAD mismatch.
         """
         raw_bundle_bytes = self.adapter.retrieve(storage_id)
@@ -87,8 +99,23 @@ class CertificateStorageService:
         content_type = metadata.get("content_type", "")
         expected_aad = self._build_aad(storage_id, doc_digest, content_type)
 
-        plaintext = self.encryptor.decrypt(envelope, expected_aad=expected_aad)
-        return plaintext, metadata
+        # Try primary key first
+        try:
+            plaintext = self.encryptor.decrypt(envelope, expected_aad=expected_aad)
+            return plaintext, metadata
+        except AppException as primary_err:
+            # If primary key fails, attempt fallback keys from rotation ring
+            for fb_encryptor in self.fallback_encryptors:
+                try:
+                    plaintext = fb_encryptor.decrypt(envelope, expected_aad=expected_aad)
+                    # Re-encrypt with primary key to migrate stored file
+                    new_envelope = self.encryptor.encrypt(plaintext, aad=expected_aad)
+                    new_envelope_json = json.dumps(new_envelope).encode("utf-8")
+                    self.adapter.store(storage_id, new_envelope_json, metadata, overwrite=True)
+                    return plaintext, metadata
+                except Exception:
+                    continue
+            raise primary_err
 
     def get_metadata(self, storage_id: str) -> Dict[str, Any]:
         """

@@ -30,6 +30,10 @@ class CredentialResponse(BaseModel):
     issuance_tx_hash: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    pending_version: Optional[int] = None
+    operation_id: Optional[str] = None
+    operation_status: Optional[str] = None
+    operation_tx_hash: Optional[str] = None
 
 
 class CredentialVersionResponse(BaseModel):
@@ -59,3 +63,7 @@ class VerificationResponse(BaseModel):
     blockchain_code: Optional[str] = None
     details: str
     checked_at: datetime
+
+
+class LifecycleActionRequest(BaseModel):
+    reason_code: int = Field(1, ge=1, le=5, description="Lifecycle modification reason code (1..5)")

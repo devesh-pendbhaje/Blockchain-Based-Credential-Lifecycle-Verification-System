@@ -12,6 +12,10 @@ export interface CredentialCreateRequest {
 }
 
 export interface CredentialResponse {
+  pending_version?: number | null;
+  operation_id?: string | null;
+  operation_status?: string | null;
+  operation_tx_hash?: string | null;
   credential_id: string;
   issuer_id: string;
   current_version: number;
@@ -50,4 +54,18 @@ export interface VerificationResponse {
   blockchain_code: string | null;
   details: string;
   checked_at: string;
+}
+
+export interface CredentialPackage {
+  credential_id: string;
+  version: number;
+  issuer_id: string;
+  document_digest: string;
+  metadata_digest: string;
+  merkle_root: string;
+  fingerprint: string;
+  attributes: Record<string, string>;
+  salts: Record<string, string>;
+  created_at?: string;
+  expires_at?: number;
 }

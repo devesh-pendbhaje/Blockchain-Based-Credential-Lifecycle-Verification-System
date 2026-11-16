@@ -75,7 +75,7 @@ describe('Route Rendering & Application Shell', () => {
   it('renders SelectiveDisclosurePage at "/presentations"', () => {
     renderWithRoute('/presentations');
     expect(screen.getByRole('heading', { name: /Privacy-Preserving Selective Disclosure/i })).toBeInTheDocument();
-    expect(screen.getByText(/Issue Verifier Challenge/i)).toBeInTheDocument();
+    expect(screen.getByText(/Request Verifier Nonce Challenge/i)).toBeInTheDocument();
   });
 
   it('renders StoredDocumentsPage at "/documents"', () => {

@@ -10,7 +10,7 @@ def _setup_issuer(client: TestClient, issuer_id: str, headers: dict):
     )
 
 
-def test_credential_lifecycle_and_versioning(client: TestClient, admin_headers):
+def test_credential_lifecycle_and_versioning(client: TestClient, admin_headers, fake_chain):
     issuer_id = "0x" + "11" * 32
     credential_id = "0x" + "22" * 32
     doc1 = "0x" + "33" * 32

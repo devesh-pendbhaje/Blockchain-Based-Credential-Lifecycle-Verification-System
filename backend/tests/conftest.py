@@ -72,6 +72,20 @@ settings.AUTH_DEV_PUBLIC_KEY = _test_public_pem
 settings.AUTH_DEV_PRIVATE_KEY = _test_private_pem
 settings.OIDC_ISSUER_URL = "https://idp.institution.example.org"
 settings.OIDC_AUDIENCE = "credential-verification-api"
+settings.AUTH_MODE = "local_dev"
+settings.ENVIRONMENT = "development"
+
+# Isolate blockchain client during standard automated unit/regression tests to prevent live RPC calls
+settings.BLOCKCHAIN_RPC_URL = "http://127.0.0.1:8545"
+settings.BLOCKCHAIN_TIMEOUT_SECONDS = 0.5
+settings.BLOCKCHAIN_SIGNER_PRIVATE_KEY = None
+
+from app.blockchain.client import blockchain_client
+blockchain_client.signer_account = None
+blockchain_client.signer_address = None
+blockchain_client.can_transact = False
+blockchain_client._cached_connected = False
+blockchain_client.timeout = 0.5
 
 
 @pytest.fixture(scope="session")
@@ -172,6 +186,35 @@ def other_verifier_headers():
     return {"Authorization": f"Bearer {tok}"}
 
 
+@pytest.fixture
+def user_headers():
+    tok = create_test_jwt(
+        sub="ordinary-student-user",
+        roles=["user"],
+    )
+    return {"Authorization": f"Bearer {tok}"}
+
+
+@pytest.fixture
+def unbound_issuer_headers():
+    tok = create_test_jwt(
+        sub="unbound-issuer-principal",
+        roles=["issuer"],
+        issuer_id=None,
+    )
+    return {"Authorization": f"Bearer {tok}"}
+
+
+@pytest.fixture
+def holder_headers():
+    tok = create_test_jwt(
+        sub="holder-student-subject",
+        roles=["holder"],
+    )
+    return {"Authorization": f"Bearer {tok}"}
+
+
+
 @pytest.fixture(scope="function")
 def client(db_session: Session) -> Generator[TestClient, None, None]:
     """
@@ -189,3 +232,51 @@ def client(db_session: Session) -> Generator[TestClient, None, None]:
         yield test_client
     app.dependency_overrides.clear()
 
+
+
+@pytest.fixture
+def fake_chain(monkeypatch):
+    """Explicit stateful chain double for API unit tests. Real EVM test is scripts/verify_local_e2e.py."""
+    from app.blockchain.client import blockchain_client
+    from app.crypto.fingerprint import compute_composite_fingerprint
+    records = {}
+    counter = [0]
+    monkeypatch.setattr(blockchain_client, "can_transact", True)
+    monkeypatch.setattr(blockchain_client, "is_connected", lambda *a, **kw: True)
+    monkeypatch.setattr(blockchain_client, "is_contract_ready", lambda *a, **kw: True)
+    monkeypatch.setattr(blockchain_client, "get_credential_record_on_chain", lambda fingerprint: records.get(fingerprint))
+    def result(kwargs):
+        counter[0] += 1
+        tx_hash = "0x" + format(counter[0], "064x")
+        if kwargs.get("on_broadcast"):
+            kwargs["on_broadcast"](tx_hash)
+        return {"status": "CONFIRMED", "tx_hash": tx_hash, "block_number": counter[0]}
+    def issue(**kw):
+        fp = compute_composite_fingerprint(kw["doc_digest_hex"], kw["meta_digest_hex"], kw["merkle_root_hex"],
+                                           kw["expected_issuer_id"], kw["credential_id_hex"], kw["version"])
+        records[fp] = dict(fingerprint=fp, issuer_id=kw["expected_issuer_id"], credential_id=kw["credential_id_hex"],
+             document_digest=kw["doc_digest_hex"], metadata_digest=kw["meta_digest_hex"], merkle_root=kw["merkle_root_hex"],
+             version=kw["version"], expires_at=kw.get("expires_at", 0), issued_at=1700000000, status="ACTIVE")
+        return dict(result(kw), fingerprint=fp, issuer_id=kw["expected_issuer_id"])
+    def supersede(**kw):
+        old = records[kw.pop("old_fingerprint_hex")]
+        res = issue(**kw, credential_id_hex=old["credential_id"], version=old["version"]+1)
+        old["status"] = "SUPERSEDED"
+        return res
+    def lifecycle(target, **kw):
+        records[kw["fingerprint_hex"]]["status"] = target
+        return result(kw)
+    monkeypatch.setattr(blockchain_client, "anchor_credential_fingerprint", issue)
+    monkeypatch.setattr(blockchain_client, "supersede_credential_on_chain", supersede)
+    monkeypatch.setattr(blockchain_client, "suspend_credential_on_chain", lambda **kw: lifecycle("SUSPENDED", **kw))
+    monkeypatch.setattr(blockchain_client, "reactivate_credential_on_chain", lambda **kw: lifecycle("ACTIVE", **kw))
+    monkeypatch.setattr(blockchain_client, "revoke_credential_on_chain", lambda **kw: lifecycle("REVOKED", **kw))
+    def verify(fingerprint_hex, **kw):
+        rec = records.get(fingerprint_hex)
+        if not rec:
+            return {"is_valid":False,"code":"NOT_FOUND","stored_status":"NONE","is_issuer_active":False,"expires_at":0}
+        valid = rec["status"] == "ACTIVE"
+        return {"is_valid":valid,"code":"VALID" if valid else "INVALID_STORED_STATUS", "stored_status":rec["status"],
+                "is_issuer_active":True,"expires_at":rec["expires_at"]}
+    monkeypatch.setattr(blockchain_client, "verify_credential_on_chain", verify)
+    return records

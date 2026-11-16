@@ -46,25 +46,8 @@ class OIDCValidator:
         Retrieves the signing key matching the token's header 'kid'.
         Supports local test/dev public key or JWKS dynamic lookup with key rotation handling.
         """
-        # If development public key configured, use it directly (validating kid if provided)
-        if not settings.AUTH_DEV_PUBLIC_KEY and not settings.is_production:
-            from app.core.auth.dev_keys import init_dev_auth_if_needed
-            init_dev_auth_if_needed()
-
-        if settings.AUTH_DEV_PUBLIC_KEY:
-            try:
-                hdr = jwt.get_unverified_header(token)
-                if hdr.get("kid") == "unknown-key-id":
-                    raise AppException(
-                        message="Unable to verify token signature: signing key not found in identity provider JWKS.",
-                        error_code="SIGNING_KEY_NOT_FOUND",
-                        status_code=401,
-                    )
-            except DecodeError:
-                pass
-            return settings.AUTH_DEV_PUBLIC_KEY
-
-        # Dynamic JWKS client lookup if configured or initialize lazily
+        # If in explicit local_dev mode and not production, allow local dev key
+        # 1. Dynamic JWKS client lookup if configured (or explicitly provided)
         if self._jwks_client is not None:
             try:
                 signing_key = self._jwks_client.get_signing_key_from_jwt(token)
@@ -76,7 +59,32 @@ class OIDCValidator:
                     error_code="SIGNING_KEY_NOT_FOUND",
                     status_code=401,
                 ) from exc
-        elif settings.AUTH_MODE == "oidc" and self.issuer_url:
+
+        # 2. If in explicit local_dev mode and not production, allow local dev key for dev/test key IDs
+        if settings.is_local_dev:
+            try:
+                unverified_hdr = jwt.get_unverified_header(token)
+                kid = unverified_hdr.get("kid")
+            except Exception:
+                kid = None
+
+            if kid in (None, "local-dev-rsa-1", "dev-auth-key-01", "test-key-1"):
+                if settings.AUTH_DEV_PUBLIC_KEY:
+                    return settings.AUTH_DEV_PUBLIC_KEY
+                from app.core.auth.dev_keys import init_dev_auth_if_needed
+                init_dev_auth_if_needed()
+                if settings.AUTH_DEV_PUBLIC_KEY:
+                    return settings.AUTH_DEV_PUBLIC_KEY
+            else:
+                # Token explicitly requested an unknown key ID
+                raise AppException(
+                    message="Unable to verify token signature: signing key not found in identity provider JWKS.",
+                    error_code="SIGNING_KEY_NOT_FOUND",
+                    status_code=401,
+                )
+
+        # 3. In OIDC mode, lazily initialize JWKS client
+        if settings.AUTH_MODE == "oidc" and self.issuer_url:
             jwks_url = settings.OIDC_JWKS_URL or f"{self.issuer_url}/protocol/openid-connect/certs"
             try:
                 self._jwks_client = jwt.PyJWKClient(jwks_url, cache_keys=True, max_cached_keys=16)

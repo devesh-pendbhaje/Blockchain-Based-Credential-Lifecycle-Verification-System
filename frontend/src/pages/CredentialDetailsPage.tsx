@@ -1,3 +1,4 @@
+import { useAuth } from '@/context/AuthContext';
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -25,6 +26,7 @@ import { formatDate } from '@/utils/date';
 import { isValidBytes32Hex } from '@/utils/cryptoFormat';
 
 export const CredentialDetailsPage: React.FC = () => {
+  const { user, isAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryParam = searchParams.get('id') || searchParams.get('credential_id') || '';
 
@@ -96,6 +98,18 @@ export const CredentialDetailsPage: React.FC = () => {
     fetchCredentialData(inputQuery);
   };
 
+  const manage = async (action: 'suspend' | 'reactivate' | 'revoke' | 'reconcile') => {
+    if (!credential) return;
+    if (action === 'revoke' && !window.confirm('Permanently revoke this credential?')) return;
+    setIsLoading(true); setError(null);
+    try {
+      if (action === 'reconcile') await credentialApi.reconcile(credential.credential_id, credential.pending_version || credential.current_version);
+      else if (action === 'suspend') await credentialApi.suspendCredential(credential.credential_id);
+      else if (action === 'reactivate') await credentialApi.reactivateCredential(credential.credential_id);
+      else await credentialApi.revokeCredential(credential.credential_id);
+      await fetchCredentialData(credential.credential_id);
+    } catch(e) {setError(e as AppError);} finally {setIsLoading(false);}
+  };
   return (
     <div className="space-y-8 animate-in fade-in">
       <PageHeader
@@ -166,6 +180,13 @@ export const CredentialDetailsPage: React.FC = () => {
               </div>
             </div>
 
+            {(isAdmin || (user?.roles.includes('issuer') && user.issuerId === credential.issuer_id)) && <div className="flex flex-wrap items-center gap-3 text-sm">
+              <span>Transaction: {credential.operation_status || credential.issuance_status}</span>
+              <button disabled={isLoading} onClick={()=>manage('reconcile')} className="px-3 py-2 bg-brand-700 rounded">Reconcile / retry</button>
+              {credential.current_status === 'ACTIVE' && <button disabled={isLoading} onClick={()=>manage('suspend')} className="px-3 py-2 bg-amber-800 rounded">Suspend</button>}
+              {credential.current_status === 'SUSPENDED' && <button disabled={isLoading} onClick={()=>manage('reactivate')} className="px-3 py-2 bg-emerald-800 rounded">Reactivate</button>}
+              {['ACTIVE','SUSPENDED'].includes(credential.current_status) && <button disabled={isLoading} onClick={()=>manage('revoke')} className="px-3 py-2 bg-rose-800 rounded">Revoke permanently</button>}
+            </div>}
             {/* Authoritative Composite Fingerprint */}
             <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg space-y-2">
               <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-semibold">

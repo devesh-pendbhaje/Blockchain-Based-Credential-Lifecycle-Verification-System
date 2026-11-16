@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { HolderWalletPage } from '@/pages/HolderWalletPage';
 import { CredentialQrModal } from '@/components/qr/CredentialQrModal';
@@ -85,14 +85,11 @@ describe('Holder Wallet & QR Verification Workflows', () => {
 
     expect(screen.getByRole('heading', { name: /Holder Verifiable Credential Wallet/i })).toBeInTheDocument();
     expect(screen.getByText(/Total Held/i)).toBeInTheDocument();
-    expect(screen.getByText(/Active & Good Standing/i)).toBeInTheDocument();
-    expect(screen.getByText(/Strict Zero-PII/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Encrypted holder package')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Unlock and import'})).toBeDisabled();
+    expect(screen.queryByText('Credential v1')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Sepolia Anchored/i)).not.toBeInTheDocument();
 
-    // Verify credential card appears
-    await waitFor(() => {
-      expect(screen.getByText('v1')).toBeInTheDocument();
-      expect(screen.getAllByText(/Sepolia Anchored/i).length).toBeGreaterThanOrEqual(1);
-    });
   });
 
   it('renders CredentialQrModal with zero-PII guarantee badge and action buttons', async () => {

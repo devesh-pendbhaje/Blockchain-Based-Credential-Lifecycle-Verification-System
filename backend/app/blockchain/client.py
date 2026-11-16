@@ -2,7 +2,7 @@ import time
 import urllib.parse
 from typing import Any, Dict, Optional, Tuple, Union, List
 from web3 import Web3
-from web3.exceptions import Web3Exception, ContractLogicError
+from web3.exceptions import Web3Exception, ContractLogicError, TimeExhausted
 from eth_account import Account
 from eth_account.signers.local import LocalAccount
 
@@ -339,6 +339,49 @@ class BlockchainClient:
             logger.debug(f"Failed to query getIssuerBySigningAddress: {e}")
             return None
 
+    def verify_signer_authorized_for_issuer(self, expected_issuer_id: Optional[str]) -> Tuple[bool, Optional[str]]:
+        """
+        Validates that:
+        1. An expected issuer ID is provided.
+        2. IssuerRegistry contract is available and ready.
+        3. A local signer address is configured and can transact.
+        4. Signer address is queried on-chain: lookup must succeed and return an accredited issuer.
+        5. The on-chain issuer ID matches expected_issuer_id exactly.
+        6. The on-chain issuer authority is active (not revoked or suspended).
+        Fails closed on any error, missing dependency, or mismatch without broadcasting transactions.
+        """
+        if not expected_issuer_id:
+            return (False, "EXPECTED_ISSUER_REQUIRED: An expected issuer ID must be specified for on-chain credential operations.")
+
+        if not self.is_contract_ready("issuer"):
+            return (False, "ISSUER_REGISTRY_NOT_READY: Issuer registry contract is not configured or not deployed.")
+
+        if not self.signer_address or not self.can_transact:
+            return (False, "SIGNER_NOT_CONFIGURED: No local transaction signing account is configured.")
+
+        # Query on-chain binding
+        try:
+            signer_issuer = self.get_signer_issuer_id()
+            if not signer_issuer or signer_issuer == "0x" + "00" * 32:
+                return (False, f"UNKNOWN_OR_INACTIVE_SIGNER: Signing address {self.signer_address} is not bound to any accredited issuer on-chain.")
+        except Exception as e:
+            logger.error(f"Signer issuer lookup failed: {e}")
+            return (False, f"SIGNER_LOOKUP_FAILED: Failed to verify signer address {self.signer_address} on IssuerRegistry: {e}")
+
+        # Compare issuer IDs
+        if signer_issuer.lower() != expected_issuer_id.lower():
+            return (False, f"ISSUER_MISMATCH: Signer {self.signer_address} is authorized for issuer {signer_issuer}, but requested issuer is {expected_issuer_id}.")
+
+        # Check issuer status on-chain
+        try:
+            avail, is_active, status_name = self.get_issuer_status_on_chain(expected_issuer_id)
+            if not avail or not is_active:
+                return (False, f"ISSUER_NOT_ACTIVE: Expected issuer {expected_issuer_id} is in status '{status_name}' on-chain.")
+        except Exception as e:
+            logger.error(f"Issuer status lookup failed: {e}")
+            return (False, f"ISSUER_STATUS_LOOKUP_FAILED: {e}")
+
+        return (True, None)
 
     def register_issuer_on_chain(
         self,
@@ -425,228 +468,78 @@ class BlockchainClient:
     # ON-CHAIN CREDENTIAL OPERATIONS
     # =========================================================================
 
-    def anchor_credential_fingerprint(
-        self,
-        credential_id_hex: str,
-        doc_digest_hex: str,
-        meta_digest_hex: str,
-        merkle_root_hex: str,
-        version: int,
-        expires_at: int = 0,
-    ) -> Dict[str, Any]:
-        """
-        Submits issueCredential(...) transaction to anchor composite fingerprint on-chain.
-        Requires signer configured with accredited issuer authority.
-        """
+    def _credential_transaction(self, function_name, args, expected_issuer_id, on_broadcast=None):
+        """One signing worker. Persist the signed hash BEFORE any network send."""
+        from threading import RLock
         if not self.can_transact:
-            return {"success": False, "status": "UNAVAILABLE", "error": "SIGNER_NOT_CONFIGURED"}
-        if not self.is_contract_ready("credential"):
-            return {"success": False, "status": "UNAVAILABLE", "error": "CREDENTIAL_REGISTRY_NOT_READY"}
-
-        # Format 32-byte hex arguments
-        def to_bytes32(hex_val: str) -> bytes:
-            clean = hex_val[2:] if hex_val.startswith("0x") else hex_val
-            return bytes.fromhex(clean)
-
-        b_cred_id = to_bytes32(credential_id_hex)
-        b_doc = to_bytes32(doc_digest_hex)
-        b_meta = to_bytes32(meta_digest_hex)
-        b_root = to_bytes32(merkle_root_hex)
-
-        try:
-            tx_func = self.credential_contract.functions.issueCredential(
-                b_cred_id,
-                b_doc,
-                b_meta,
-                b_root,
-                int(version),
-                int(expires_at),
-            )
-
-            nonce = self.w3.eth.get_transaction_count(self.signer_address, "pending")
-
+            return {"status": "UNAVAILABLE", "success": False, "error": "SIGNER_NOT_CONFIGURED"}
+        if not hasattr(self, "_tx_lock"):
+            self._tx_lock = RLock()
+        with self._tx_lock:
+            authorized, error = self.verify_signer_authorized_for_issuer(expected_issuer_id)
+            if not authorized:
+                return {"status": "FAILED", "success": False, "error": "SIGNER_UNAUTHORIZED_FOR_ISSUER: " + str(error)}
+            if not self.is_contract_ready("credential"):
+                return {"status": "UNAVAILABLE", "success": False, "error": "CREDENTIAL_REGISTRY_NOT_READY"}
+            tx_hash = None
             try:
-                estimated_gas = tx_func.estimate_gas({"from": self.signer_address})
-                gas_limit = int(estimated_gas * 1.25)
-            except Exception:
-                gas_limit = 350000
-
-            gas_price = int(self.w3.eth.gas_price * 1.35)
-            tx = tx_func.build_transaction({
-                "from": self.signer_address,
-                "nonce": nonce,
-                "gas": gas_limit,
-                "gasPrice": gas_price,
-                "chainId": self.chain_id,
-            })
-
-            signed_tx = self.signer_account.sign_transaction(tx)
-            raw_tx = getattr(signed_tx, "raw_transaction", None) or getattr(signed_tx, "rawTransaction")
-            tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
-
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=self.timeout)
-
-            if receipt.status == 1:
-                # Extract CredentialIssued event from receipt logs
-                fingerprint_result = None
-                issuer_id_result = None
-                try:
+                fn = getattr(self.credential_contract.functions, function_name)(*args)
+                # A failing estimate is a rejected operation, not permission to send a reverting transaction.
+                gas = int(fn.estimate_gas({"from": self.signer_address}) * 1.25)
+                tx = fn.build_transaction({"from": self.signer_address,
+                    "nonce": self.w3.eth.get_transaction_count(self.signer_address, "pending"),
+                    "gas": gas, "gasPrice": int(self.w3.eth.gas_price * 1.35), "chainId": self.chain_id})
+                signed = self.signer_account.sign_transaction(tx)
+                raw = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction")
+                tx_hash = Web3.to_hex(Web3.keccak(raw))
+                if on_broadcast:
+                    on_broadcast(tx_hash)
+                self.w3.eth.send_raw_transaction(raw)
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=self.timeout)
+                if receipt.status != 1:
+                    return {"status": "REVERTED", "success": False, "tx_hash": tx_hash,
+                            "block_number": receipt.blockNumber, "error": "Transaction reverted"}
+                if self.confirmation_blocks > 1 and self.w3.eth.block_number < receipt.blockNumber + self.confirmation_blocks - 1:
+                    return {"status": "PENDING", "success": False, "tx_hash": tx_hash}
+                result = {"status": "CONFIRMED", "success": True, "tx_hash": tx_hash,
+                          "block_number": receipt.blockNumber, "gas_used": receipt.gasUsed}
+                if function_name in {"issueCredential", "supersedeCredential"}:
                     events = self.credential_contract.events.CredentialIssued().process_receipt(receipt)
                     if events:
-                        fingerprint_result = "0x" + events[0]["args"]["fingerprint"].hex()
-                        issuer_id_result = "0x" + events[0]["args"]["issuerId"].hex()
-                except Exception:
-                    pass
-
-                return {
-                    "success": True,
-                    "status": "CONFIRMED",
-                    "tx_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber,
-                    "gas_used": receipt.gasUsed,
-                    "fingerprint": fingerprint_result,
-                    "issuer_id": issuer_id_result,
-                }
-            else:
-                return {
-                    "success": False,
-                    "status": "REVERTED",
-                    "tx_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber,
-                    "error": "Credential anchoring transaction reverted on-chain",
-                }
-
-        except Exception as e:
-            logger.error(f"Failed to submit issueCredential transaction: {e}")
-            return {"success": False, "status": "FAILED", "error": str(e)}
-
-    def suspend_credential_on_chain(
-        self,
-        fingerprint_hex: str,
-        reason_code: int = 1,
-    ) -> Dict[str, Any]:
-        """
-        Submits suspendCredential(fingerprint, reasonCode) transaction.
-        Requires signer configured with accredited issuer authority matching the credential's issuer.
-        """
-        if not self.can_transact:
-            return {"success": False, "status": "UNAVAILABLE", "error": "SIGNER_NOT_CONFIGURED"}
-        if not self.is_contract_ready("credential"):
-            return {"success": False, "status": "UNAVAILABLE", "error": "CREDENTIAL_REGISTRY_NOT_READY"}
-
-        def to_bytes32(hex_val: str) -> bytes:
-            clean = hex_val[2:] if hex_val.startswith("0x") else hex_val
-            return bytes.fromhex(clean)
-
-        b_fp = to_bytes32(fingerprint_hex)
-
-        try:
-            tx_func = self.credential_contract.functions.suspendCredential(
-                b_fp,
-                int(reason_code),
-            )
-            nonce = self.w3.eth.get_transaction_count(self.signer_address, "pending")
-            try:
-                estimated_gas = tx_func.estimate_gas({"from": self.signer_address})
-                gas_limit = int(estimated_gas * 1.25)
+                        result["fingerprint"] = Web3.to_hex(events[0]["args"]["fingerprint"])
+                        result["issuer_id"] = Web3.to_hex(events[0]["args"]["issuerId"])
+                return result
             except Exception:
-                gas_limit = 150000
+                # A socket error after send can mean the node accepted the transaction.
+                # Keep its hash and force receipt reconciliation, including across restarts.
+                if tx_hash:
+                    return {"status": "PENDING", "success": False, "tx_hash": tx_hash,
+                            "uncertain": True, "error": "Confirmation unavailable; reconcile transaction"}
+                return {"status": "FAILED", "success": False, "error": "Transaction preparation rejected"}
 
-            gas_price = int(self.w3.eth.gas_price * 1.35)
-            tx = tx_func.build_transaction({
-                "from": self.signer_address,
-                "nonce": nonce,
-                "gas": gas_limit,
-                "gasPrice": gas_price,
-                "chainId": self.chain_id,
-            })
-            signed_tx = self.signer_account.sign_transaction(tx)
-            raw_tx = getattr(signed_tx, "raw_transaction", None) or getattr(signed_tx, "rawTransaction")
-            tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=self.timeout)
+    @staticmethod
+    def _b32(value):
+        from app.schemas.common import validate_bytes32_hex
+        return bytes.fromhex(validate_bytes32_hex(value, allow_zero=False)[2:])
 
-            if receipt.status == 1:
-                return {
-                    "success": True,
-                    "status": "CONFIRMED",
-                    "tx_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber,
-                    "gas_used": receipt.gasUsed,
-                    "fingerprint": fingerprint_hex,
-                }
-            else:
-                return {
-                    "success": False,
-                    "status": "REVERTED",
-                    "tx_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber,
-                    "error": "Credential suspension transaction reverted on-chain",
-                }
-        except Exception as e:
-            logger.error(f"Failed to submit suspendCredential transaction: {e}")
-            return {"success": False, "status": "FAILED", "error": str(e)}
+    def anchor_credential_fingerprint(self, credential_id_hex, doc_digest_hex, meta_digest_hex,
+                                      merkle_root_hex, version, expires_at=0, expected_issuer_id=None, on_broadcast=None):
+        args = [self._b32(v) for v in [credential_id_hex, doc_digest_hex, meta_digest_hex, merkle_root_hex]]
+        return self._credential_transaction("issueCredential", args + [version, expires_at], expected_issuer_id, on_broadcast)
 
-    def reactivate_credential_on_chain(
-        self,
-        fingerprint_hex: str,
-    ) -> Dict[str, Any]:
-        """
-        Submits reactivateCredential(fingerprint) transaction.
-        Requires signer configured with accredited issuer authority matching the credential's issuer.
-        """
-        if not self.can_transact:
-            return {"success": False, "status": "UNAVAILABLE", "error": "SIGNER_NOT_CONFIGURED"}
-        if not self.is_contract_ready("credential"):
-            return {"success": False, "status": "UNAVAILABLE", "error": "CREDENTIAL_REGISTRY_NOT_READY"}
+    def supersede_credential_on_chain(self, old_fingerprint_hex, doc_digest_hex, meta_digest_hex,
+                                      merkle_root_hex, expires_at=0, expected_issuer_id=None, on_broadcast=None):
+        args = [self._b32(v) for v in [old_fingerprint_hex, doc_digest_hex, meta_digest_hex, merkle_root_hex]]
+        return self._credential_transaction("supersedeCredential", args + [expires_at], expected_issuer_id, on_broadcast)
 
-        def to_bytes32(hex_val: str) -> bytes:
-            clean = hex_val[2:] if hex_val.startswith("0x") else hex_val
-            return bytes.fromhex(clean)
+    def suspend_credential_on_chain(self, fingerprint_hex, reason_code=1, expected_issuer_id=None, on_broadcast=None):
+        return self._credential_transaction("suspendCredential", [self._b32(fingerprint_hex), reason_code], expected_issuer_id, on_broadcast)
 
-        b_fp = to_bytes32(fingerprint_hex)
+    def reactivate_credential_on_chain(self, fingerprint_hex, expected_issuer_id=None, on_broadcast=None):
+        return self._credential_transaction("reactivateCredential", [self._b32(fingerprint_hex)], expected_issuer_id, on_broadcast)
 
-        try:
-            tx_func = self.credential_contract.functions.reactivateCredential(b_fp)
-            nonce = self.w3.eth.get_transaction_count(self.signer_address, "pending")
-            try:
-                estimated_gas = tx_func.estimate_gas({"from": self.signer_address})
-                gas_limit = int(estimated_gas * 1.25)
-            except Exception:
-                gas_limit = 150000
-
-            gas_price = int(self.w3.eth.gas_price * 1.35)
-            tx = tx_func.build_transaction({
-                "from": self.signer_address,
-                "nonce": nonce,
-                "gas": gas_limit,
-                "gasPrice": gas_price,
-                "chainId": self.chain_id,
-            })
-            signed_tx = self.signer_account.sign_transaction(tx)
-            raw_tx = getattr(signed_tx, "raw_transaction", None) or getattr(signed_tx, "rawTransaction")
-            tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
-            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=self.timeout)
-
-            if receipt.status == 1:
-                return {
-                    "success": True,
-                    "status": "CONFIRMED",
-                    "tx_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber,
-                    "gas_used": receipt.gasUsed,
-                    "fingerprint": fingerprint_hex,
-                }
-            else:
-                return {
-                    "success": False,
-                    "status": "REVERTED",
-                    "tx_hash": tx_hash.hex(),
-                    "block_number": receipt.blockNumber,
-                    "error": "Credential reactivation transaction reverted on-chain",
-                }
-        except Exception as e:
-            logger.error(f"Failed to submit reactivateCredential transaction: {e}")
-            return {"success": False, "status": "FAILED", "error": str(e)}
+    def revoke_credential_on_chain(self, fingerprint_hex, reason_code=1, expected_issuer_id=None, on_broadcast=None):
+        return self._credential_transaction("revokeCredential", [self._b32(fingerprint_hex), reason_code], expected_issuer_id, on_broadcast)
 
     def get_credential_record_on_chain(self, fingerprint_hex: str) -> Optional[Dict[str, Any]]:
         """
@@ -774,6 +667,29 @@ class BlockchainClient:
             }
         except Exception as e:
             logger.warning(f"On-chain credential verification call failed: {e}")
+            return None
+
+    def get_transaction_receipt(self, tx_hash_hex: str) -> Optional[Dict[str, Any]]:
+        """
+        Queries transaction receipt for an existing tx hash without broadcasting.
+        Returns receipt dict if mined, None if pending or unavailable.
+        """
+        if not self.is_connected() or not self.w3:
+            return None
+        try:
+            receipt = self.w3.eth.get_transaction_receipt(tx_hash_hex)
+            if receipt:
+                if self.w3.eth.block_number < receipt.blockNumber + self.confirmation_blocks - 1:
+                    return None
+                return {
+                    "status": "CONFIRMED" if receipt.status == 1 else "REVERTED",
+                    "block_number": getattr(receipt, "blockNumber", None),
+                    "gas_used": getattr(receipt, "gasUsed", None),
+                    "tx_hash": tx_hash_hex,
+                }
+            return None
+        except Exception as e:
+            logger.debug(f"Transaction receipt lookup for {tx_hash_hex} returned: {e}")
             return None
 
 

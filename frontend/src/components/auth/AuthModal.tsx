@@ -30,7 +30,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
-  const handleSelectPersona = async (role: 'admin' | 'issuer' | 'verifier') => {
+  const handleSelectPersona = async (role: 'admin' | 'issuer' | 'verifier' | 'holder') => {
     setIsLoadingPersona(role);
     setModalError(null);
     clearError();
@@ -176,6 +176,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
               </p>
 
               <div className="grid gap-2.5">
+                <button type="button" disabled={isLoadingPersona !== null} onClick={() => handleSelectPersona('holder')} className="p-3 rounded-lg border border-slate-700 text-left">Holder - import a package and disclose selected claims</button>
                 <button
                   type="button"
                   disabled={isLoadingPersona !== null}

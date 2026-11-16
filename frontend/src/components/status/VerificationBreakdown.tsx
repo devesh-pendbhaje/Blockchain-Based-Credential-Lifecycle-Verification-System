@@ -69,6 +69,8 @@ export const VerificationBreakdown: React.FC<VerificationBreakdownProps> = ({
               <h3 className="text-lg font-bold tracking-tight">
                 {is_valid
                   ? 'Authoritative Verification: VALID'
+                  : !database_found
+                  ? 'Verification: CREDENTIAL NOT FOUND'
                   : !blockchain_available
                   ? 'Verification Incomplete: BLOCKCHAIN UNAVAILABLE'
                   : 'Authoritative Verification: INVALID'}

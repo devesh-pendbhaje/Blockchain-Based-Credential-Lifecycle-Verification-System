@@ -30,7 +30,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      ENVIRONMENT: development
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-credential_verification}
       BLOCKCHAIN_RPC_URL: ${BLOCKCHAIN_RPC_URL:-http://host.docker.internal:8545}
       BLOCKCHAIN_CHAIN_ID: ${BLOCKCHAIN_CHAIN_ID:-${CHAIN_ID:-11155111}}
@@ -40,6 +40,8 @@ services:
       BLOCKCHAIN_SIGNER_PRIVATE_KEY: ${BLOCKCHAIN_SIGNER_PRIVATE_KEY:-}
       BLOCKCHAIN_TIMEOUT_SECONDS: ${BLOCKCHAIN_TIMEOUT_SECONDS:-10.0}
       STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      STORAGE_PREVIOUS_ENCRYPTION_KEYS: ${STORAGE_PREVIOUS_ENCRYPTION_KEYS:-[]}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
       STORAGE_ROOT_DIR: /app/data/storage
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-10485760}
       CHALLENGE_EXPIRY_SECONDS: ${CHALLENGE_EXPIRY_SECONDS:-300}
@@ -51,7 +53,7 @@ services:
     volumes:
       - certificate_storage:/app/data/storage
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/live"]
       interval: 10s
@@ -72,7 +74,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     networks:
       - credential_network
 

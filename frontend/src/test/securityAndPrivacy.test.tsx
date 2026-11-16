@@ -32,7 +32,7 @@ describe('Security, Privacy & Data Integrity', () => {
     );
 
     // Verify honest infrastructure indicators exist
-    expect(screen.getByText(/PostgreSQL Persistence/i)).toBeInTheDocument();
+    expect(screen.getByText(/Database Persistence/i)).toBeInTheDocument();
     expect(screen.getByText(/EVM Node \(Hardhat\/RPC\)/i)).toBeInTheDocument();
 
     // Verify NO fabricated statistics or fake metrics counters are present

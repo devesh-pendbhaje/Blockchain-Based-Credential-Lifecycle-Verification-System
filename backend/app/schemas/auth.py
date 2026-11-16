@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 
 class DevTokenRequest(BaseModel):
-    persona: Literal["admin", "issuer", "verifier", "custom"] = Field(
+    persona: Literal["admin", "issuer", "verifier", "holder", "custom"] = Field(
         default="admin",
         description="Pre-configured persona or custom",
     )

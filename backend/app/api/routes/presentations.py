@@ -76,7 +76,9 @@ def verify_presentation(
     )
 
     # Record operational audit event without sensitive claim values
-    fp = req.presentation.get("credential_fingerprint", "unknown")
+    fp = getattr(req.presentation, "credential_fingerprint", None) or (
+        req.presentation.get("credential_fingerprint", "unknown") if isinstance(req.presentation, dict) else "unknown"
+    )
     cred_repo = CredentialRepository(db)
     cred_repo.record_audit(
         event_type="PRESENTATION_VERIFIED",

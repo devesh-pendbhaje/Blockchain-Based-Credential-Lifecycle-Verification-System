@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { holderPackages, encryptPackage, downloadText } from '@/services/holderPackages';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -17,8 +18,12 @@ import {
   LogIn,
   Key,
   Lock,
+  Download,
+  Wallet,
 } from 'lucide-react';
+import { CredentialPackage } from '@/types/credential';
 import { useAuth } from '@/context/AuthContext';
+import { tokenStore } from '@/services/tokenStore';
 import { AuthModal } from '@/components/auth/AuthModal';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { FormField } from '@/components/forms/FormField';
@@ -41,6 +46,8 @@ import { AppError } from '@/types/api';
 
 export const CredentialIssuancePage: React.FC = () => {
   // Issuance Wizard Steps
+  const [packagePassphrase, setPackagePassphrase] = useState('');
+  const [exportError, setExportError] = useState('');
   const [currentStep, setCurrentStep] = useState<number>(1);
 
   // Auth context for identity guardrails
@@ -76,6 +83,8 @@ export const CredentialIssuancePage: React.FC = () => {
     { id: '5', key: 'graduationYear', value: '2026' },
   ]);
   const [merkleResult, setMerkleResult] = useState<MerkleBuildTreeResponse | null>(null);
+  const [committedAttributes, setCommittedAttributes] = useState<Record<string, string>>({});
+  const [issuedPackage, setIssuedPackage] = useState<CredentialPackage | null>(null);
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -87,6 +96,7 @@ export const CredentialIssuancePage: React.FC = () => {
     register,
     handleSubmit,
     setValue,
+    getValues,
     watch,
     formState: { errors },
   } = useForm<CredentialCreateFormValues>({
@@ -111,6 +121,7 @@ export const CredentialIssuancePage: React.FC = () => {
 
   // Handle Certificate Upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const identity = tokenStore.getToken();
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -120,6 +131,7 @@ export const CredentialIssuancePage: React.FC = () => {
 
     try {
       const resp = await documentApi.uploadCertificate(file, (p) => setUploadProgress(p));
+      if (identity !== tokenStore.getToken()) return;
       setUploadResult(resp);
       setValue('document_digest', resp.document_digest, { shouldValidate: true });
     } catch (err) {
@@ -131,6 +143,7 @@ export const CredentialIssuancePage: React.FC = () => {
 
   // Handle Canonical Metadata Generation
   const handleCanonicalize = async () => {
+    const identity = tokenStore.getToken();
     setIsCanonicalizing(true);
     setIssuanceError(null);
 
@@ -148,6 +161,7 @@ export const CredentialIssuancePage: React.FC = () => {
       }
 
       const resp = await documentApi.canonicalizeMetadata(parsed);
+      if (identity !== tokenStore.getToken()) return;
       setCanonicalResult(resp);
       setValue('metadata_digest', resp.metadata_digest, { shouldValidate: true });
     } catch (err) {
@@ -159,6 +173,7 @@ export const CredentialIssuancePage: React.FC = () => {
 
   // Handle Merkle Tree Generation
   const handleBuildMerkleTree = async () => {
+    const identity = tokenStore.getToken();
     setIsBuildingMerkle(true);
     setIssuanceError(null);
 
@@ -182,6 +197,8 @@ export const CredentialIssuancePage: React.FC = () => {
       }
 
       const resp = await merkleApi.buildTree({ attributes });
+      if (identity !== tokenStore.getToken()) return;
+      setCommittedAttributes(attributes);
       setMerkleResult(resp);
       setValue('merkle_root', resp.merkle_root, { shouldValidate: true });
     } catch (err) {
@@ -193,6 +210,13 @@ export const CredentialIssuancePage: React.FC = () => {
 
   // Final Submission
   const onFinalSubmit = async (values: CredentialCreateFormValues) => {
+    const identity = tokenStore.getToken();
+    if (!merkleResult || values.merkle_root !== merkleResult.merkle_root) {
+      setIssuanceError({type:'VALIDATION_ERROR', errorCode:'MISSING_ORIGINAL_SALTS',
+        message:'Build the attribute tree in step 4 and use its root before issuing.'});
+      setShowConfirm(false);
+      return;
+    }
     setIsSubmitting(true);
     setIssuanceError(null);
 
@@ -208,7 +232,18 @@ export const CredentialIssuancePage: React.FC = () => {
         idempotency_key: values.idempotency_key || null,
       });
 
+      if (identity !== tokenStore.getToken()) return;
       setIssuanceResult(resp);
+      // Pending supersession still reports the old current fingerprint. Use this version's record.
+      const versions = await credentialApi.getCredentialVersions(resp.credential_id);
+      if (identity !== tokenStore.getToken()) return;
+      const issuedVersion = versions.find(v => v.version === values.version);
+      if (!issuedVersion) throw new Error('Issued version could not be loaded. Keep this page open and retry.');
+      setIssuedPackage({credential_id: resp.credential_id, version: values.version,
+        issuer_id: resp.issuer_id, document_digest: values.document_digest,
+        metadata_digest: values.metadata_digest, merkle_root: values.merkle_root,
+        fingerprint: issuedVersion.fingerprint, attributes: {...committedAttributes},
+        salts: {...merkleResult?.salts}, created_at: resp.created_at});
       setShowConfirm(false);
     } catch (err) {
       setIssuanceError(err as AppError);
@@ -217,6 +252,53 @@ export const CredentialIssuancePage: React.FC = () => {
       setIsSubmitting(false);
     }
   };
+
+  const navigate = useNavigate();
+
+  const getCredentialPackage = (): CredentialPackage | null => {
+    return issuedPackage;
+  };
+
+  const handleDownloadPackage = async () => {
+    const identity = tokenStore.getToken();
+    try {
+      setExportError('');
+      const pkg = getCredentialPackage();
+      if (!pkg || issuanceResult?.operation_status !== 'CONFIRMED' || issuanceResult.current_version !== pkg.version) throw new Error('Anchor and confirm the credential before exporting.');
+      const encrypted = await encryptPackage(pkg, packagePassphrase);
+      if (identity !== tokenStore.getToken()) return;
+      downloadText(encrypted, `credential-${pkg.credential_id.slice(0,10)}.credential`);
+      setPackagePassphrase('');
+    } catch(e) {setExportError(e instanceof Error ? e.message : 'Export failed');}
+  };
+  const handleSendToWallet = () => {
+    const pkg = getCredentialPackage();
+    if (!pkg || issuanceResult?.operation_status !== 'CONFIRMED' || issuanceResult.current_version !== pkg.version) {setExportError('Confirm anchoring before opening the package.');return;}
+    holderPackages.add(pkg);
+    navigate('/wallet');
+  };
+  const reconcileIssuance = async () => {
+    if (!issuanceResult || !issuedPackage) return;
+    const identity = tokenStore.getToken();
+    setIsSubmitting(true); setExportError('');
+    try {
+      const result = await credentialApi.reconcile(issuanceResult.credential_id, issuedPackage.version);
+      if (identity === tokenStore.getToken()) setIssuanceResult(result);
+    } catch (e) {setExportError(e instanceof Error ? e.message : 'Reconciliation failed');}
+    finally {setIsSubmitting(false);}
+  };
+  useEffect(() => {
+    if (user?.issuerId) setValue('issuer_id', user.issuerId);
+    if (!getValues('credential_id')) {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      setValue('credential_id', '0x' + Array.from(bytes, b => b.toString(16).padStart(2,'0')).join(''));
+    }
+  }, [user?.issuerId]);
+  useEffect(() => tokenStore.subscribe(() => {
+    setMerkleResult(null); setIssuanceResult(null); setIssuedPackage(null);
+    setCommittedAttributes({}); setPackagePassphrase(''); setAttributeEntries([]);
+    setMetadataJson('{}'); setUploadResult(null); setCanonicalResult(null);
+  }), []);
 
   const steps = [
     { num: 1, label: 'Identifiers' },
@@ -327,31 +409,58 @@ export const CredentialIssuancePage: React.FC = () => {
               <span>Issuance Lifecycle Clarification</span>
             </div>
             <p className="leading-relaxed text-slate-400">
-              The credential request is securely recorded in the PostgreSQL database with lifecycle status{' '}
+              The credential request is recorded in the application database with lifecycle status{' '}
               <strong className="text-slate-200">{issuanceResult.issuance_status}</strong>. In production consortium
               ledgers, final verification validity requires anchoring this exact composite fingerprint to{' '}
               <code>CredentialRegistry.sol</code> via the issuer's authorized key.
             </p>
           </div>
 
-          <div className="flex gap-3">
+          <label className="block text-sm">Export passphrase (at least 12 characters)
+            <input aria-label="Export passphrase" type="password" autoComplete="off" value={packagePassphrase} onChange={e=>setPackagePassphrase(e.target.value)} className="block p-2 bg-slate-950 border border-slate-700 rounded mt-2" />
+          </label>
+          {exportError && <p role="alert" className="text-rose-300">{exportError}</p>}
+          {issuanceResult.operation_status !== 'CONFIRMED' && <button type="button" disabled={isSubmitting} onClick={reconcileIssuance} className="px-4 py-2 bg-brand-600 rounded">Reconcile issuance</button>}
+          <Link className="text-brand-300 underline text-sm" to={`/credentials?id=${issuanceResult.credential_id}`}>Manage lifecycle / reconcile pending transaction</Link>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={handleDownloadPackage}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+            >
+              <Download className="w-4 h-4" />
+              <span>Export encrypted holder package</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleSendToWallet}
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+            >
+              <Wallet className="w-4 h-4" />
+              <span>Send to Holder Wallet</span>
+            </button>
+            <Link
+              to={`/verify?fingerprint=${encodeURIComponent(issuanceResult.current_fingerprint)}`}
+              className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>Test Public Verification</span>
+            </Link>
             <button
               type="button"
               onClick={() => {
                 setIssuanceResult(null);
+                setIssuedPackage(null);
+                setPackagePassphrase('');
+                setValue('credential_id', '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2,'0')).join(''));
+                setValue('version', 1);
+                setValue('idempotency_key', '');
                 setCurrentStep(1);
               }}
               className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition-colors"
             >
               Issue Another Credential
             </button>
-            <Link
-              to={`/verify?fingerprint=${encodeURIComponent(issuanceResult.current_fingerprint)}`}
-              className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>Test Public Verification</span>
-            </Link>
           </div>
         </div>
       ) : (

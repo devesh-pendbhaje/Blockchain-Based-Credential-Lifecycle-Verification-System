@@ -52,7 +52,7 @@ export const DashboardPage: React.FC = () => {
       to: '/presentations',
       cta: 'Disclose & Verify',
       color: 'border-purple-800/40 hover:border-purple-600/60',
-      badge: 'Privacy (GDPR)',
+      badge: 'Privacy',
     },
     {
       title: 'Encrypted Certificate Storage',
@@ -69,7 +69,7 @@ export const DashboardPage: React.FC = () => {
     <div className="space-y-8 animate-in fade-in">
       <PageHeader
         title="Decentralized Credential Lifecycle Platform"
-        description="Enterprise-grade credential anchoring and privacy-preserving verification system. Cryptographically anchored on EVM ledgers without public disclosure of Personal Identifiable Information (Zero-PII)."
+        description="Credential anchoring and privacy-preserving verification system. Cryptographically anchored on EVM ledgers without public disclosure of Personal Identifiable Information (Zero-PII)."
       />
 
       {/* Live Infrastructure Connectivity Panel */}
@@ -79,7 +79,7 @@ export const DashboardPage: React.FC = () => {
             <Cpu className="w-4 h-4 text-brand-400" />
             <span>Infrastructure Connectivity</span>
           </h2>
-          <span className="text-xs font-mono text-slate-500">FastAPI + PostgreSQL + Hardhat Node</span>
+          <span className="text-xs font-mono text-slate-500">FastAPI + Database + EVM Node</span>
         </div>
 
         <SystemHealthIndicator />

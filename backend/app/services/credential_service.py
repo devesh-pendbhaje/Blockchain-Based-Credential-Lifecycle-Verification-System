@@ -4,6 +4,10 @@ import time
 from datetime import datetime, timezone
 from typing import List, Optional
 from sqlalchemy.orm import Session
+from sqlalchemy import select
+from app.models.chain_operation import ChainOperation
+from functools import wraps
+from threading import RLock
 from app.models.credential import Credential
 from app.models.credential_version import CredentialVersion
 from app.repositories.credential_repository import CredentialRepository
@@ -27,349 +31,344 @@ from app.blockchain.client import blockchain_client
 from app.core.auth.models import AuthenticatedPrincipal
 
 
+# One local signing worker; serialize mutations and nonce allocation in this process.
+_mutation_lock = RLock()
+def serialized(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _mutation_lock:
+            return fn(*args, **kwargs)
+    return wrapped
+
+
 class CredentialService:
     def __init__(self, db: Session):
         self.db = db
         self.cred_repo = CredentialRepository(db)
         self.issuer_repo = IssuerRepository(db)
 
-    def create_credential(self, req: CredentialCreateRequest) -> CredentialResponse:
-        correlation_id = req.idempotency_key or str(uuid.uuid4())
-
-        # 1. Verify Issuer exists in DB
-        issuer = self.issuer_repo.get_by_issuer_id(req.issuer_id)
-        if not issuer:
-            self.cred_repo.record_audit(
-                event_type="CREDENTIAL_ISSUANCE_REJECTED",
-                entity_type="CREDENTIAL",
-                entity_id=req.credential_id,
-                outcome="FAILURE",
-                correlation_id=correlation_id,
-                details_json=json.dumps({"reason": f"Issuer {req.issuer_id} not found"}),
-            )
-            self.db.commit()
-            raise EntityNotFoundException(f"Issuer '{req.issuer_id}' not found.")
-
-        if issuer.status == "REVOKED":
-            self.cred_repo.record_audit(
-                event_type="CREDENTIAL_ISSUANCE_REJECTED",
-                entity_type="CREDENTIAL",
-                entity_id=req.credential_id,
-                outcome="FAILURE",
-                correlation_id=correlation_id,
-                details_json=json.dumps({"reason": "Issuer is revoked"}),
-            )
-            self.db.commit()
+    def _enforce_read_authorization(
+        self,
+        principal: Optional[AuthenticatedPrincipal],
+        owner_issuer_id: str,
+    ) -> None:
+        if not principal:
             raise AppException(
-                message=f"Issuer '{req.issuer_id}' is permanently revoked and cannot issue credentials.",
-                error_code="ISSUER_REVOKED",
-                status_code=400,
+                message="Authorization required. Provide 'Authorization: Bearer <token>' header.",
+                error_code="UNAUTHORIZED",
+                status_code=401,
             )
-
-        # 2. Compute authoritative 6-input composite fingerprint
-        fingerprint = compute_composite_fingerprint(
-            document_digest=req.document_digest,
-            metadata_digest=req.metadata_digest,
-            merkle_root=req.merkle_root,
-            issuer_id=req.issuer_id,
-            credential_id=req.credential_id,
-            version=req.version,
+        if principal.is_admin() or principal.has_role("verifier"):
+            return
+        if principal.has_role("issuer"):
+            if not principal.issuer_id:
+                raise AppException(
+                    message="Forbidden: Authenticated token is not bound to any institutional issuer authority.",
+                    error_code="UNBOUND_ISSUER_IDENTITY",
+                    status_code=403,
+                )
+            if principal.issuer_id.lower() != owner_issuer_id.lower():
+                raise AppException(
+                    message="Forbidden: Access to another institution's credential is denied.",
+                    error_code="TENANT_MISMATCH",
+                    status_code=403,
+                )
+            return
+        raise AppException(
+            message="Forbidden: Insufficient permissions to access this credential.",
+            error_code="INSUFFICIENT_PERMISSIONS",
+            status_code=403,
         )
 
-        # 3. Check idempotency key if provided
-        if req.idempotency_key:
-            existing_by_key = self.cred_repo.get_version_by_idempotency_key(req.idempotency_key)
-            if existing_by_key:
-                if (
-                    existing_by_key.credential_id == req.credential_id
-                    and existing_by_key.version == req.version
-                    and existing_by_key.fingerprint == fingerprint
-                ):
-                    parent_cred = self.cred_repo.get_by_credential_id(existing_by_key.credential_id)
-                    return CredentialResponse(
-                        credential_id=parent_cred.credential_id,
-                        issuer_id=parent_cred.issuer_id,
-                        current_version=parent_cred.current_version,
-                        current_fingerprint=parent_cred.current_fingerprint,
-                        current_status=parent_cred.current_status,
-                        issuance_status=existing_by_key.issuance_status,
-                        issuance_tx_hash=existing_by_key.issuance_tx_hash,
-                        created_at=parent_cred.created_at,
-                        updated_at=parent_cred.updated_at,
-                    )
-                else:
-                    raise EntityConflictException(
-                        f"Idempotency key '{req.idempotency_key}' has already been used for a different credential issuance request."
-                    )
-
-        # 4. Check existing credential
-        existing_cred = self.cred_repo.get_by_credential_id(req.credential_id)
-
-        if not existing_cred:
-            # Initial issuance must be version 1
-            if req.version != 1:
+    def _enforce_manage_authorization(
+        self,
+        principal: Optional[AuthenticatedPrincipal],
+        owner_issuer_id: str,
+    ) -> None:
+        if not principal:
+            raise AppException(
+                message="Authorization required. Provide 'Authorization: Bearer <token>' header.",
+                error_code="UNAUTHORIZED",
+                status_code=401,
+            )
+        if principal.is_admin():
+            return
+        if principal.has_role("issuer"):
+            if not principal.issuer_id:
                 raise AppException(
-                    message=f"Initial credential issuance must be version 1, got {req.version}",
-                    error_code="INVALID_VERSION",
-                    status_code=400,
+                    message="Forbidden: Authenticated token is not bound to any institutional issuer authority.",
+                    error_code="UNBOUND_ISSUER_IDENTITY",
+                    status_code=403,
                 )
+            if principal.issuer_id.lower() != owner_issuer_id.lower():
+                raise AppException(
+                    message="Forbidden: Access to another institution's credential is denied.",
+                    error_code="TENANT_MISMATCH",
+                    status_code=403,
+                )
+            return
+        raise AppException(
+            message="Forbidden: Insufficient permissions to manage this credential.",
+            error_code="INSUFFICIENT_PERMISSIONS",
+            status_code=403,
+        )
 
-            # Ensure fingerprint is globally unique
-            existing_fp = self.cred_repo.get_version_by_fingerprint(fingerprint)
-            if existing_fp:
-                raise EntityConflictException(f"Credential fingerprint '{fingerprint}' already exists.")
+    def _credential(self, credential_id):
+        cred = self.cred_repo.get_by_credential_id(credential_id)
+        if not cred:
+            raise EntityNotFoundException(f"Credential '{credential_id}' not found.")
+        return cred
 
-            credential = Credential(
-                credential_id=req.credential_id,
-                issuer_id=req.issuer_id,
-                current_version=req.version,
-                current_fingerprint=fingerprint,
-                current_status="ACTIVE",
-            )
-            version_rec = CredentialVersion(
-                credential_id=req.credential_id,
-                version=req.version,
-                fingerprint=fingerprint,
-                idempotency_key=req.idempotency_key,
-                document_digest=req.document_digest,
-                metadata_digest=req.metadata_digest,
-                merkle_root=req.merkle_root,
-                expires_at=req.expires_at,
-                issuance_status="PENDING",
-            )
-            self.cred_repo.create_credential(credential, version_rec)
+    def _latest_operation(self, credential_id):
+        return self.db.scalars(select(ChainOperation).where(
+            ChainOperation.credential_id == credential_id
+        ).order_by(ChainOperation.created_at.desc())).first()
 
-            self.cred_repo.record_audit(
-                event_type="CREDENTIAL_ISSUANCE_REQUESTED",
-                entity_type="CREDENTIAL",
-                entity_id=req.credential_id,
-                outcome="SUCCESS",
-                correlation_id=correlation_id,
-                details_json=json.dumps({"fingerprint": fingerprint, "version": req.version}),
-            )
+    def _response(self, cred):
+        ver = self.cred_repo.get_version_by_number(cred.credential_id, cred.current_version)
+        op = self._latest_operation(cred.credential_id)
+        pending = self.db.scalars(select(CredentialVersion).where(
+            CredentialVersion.credential_id == cred.credential_id,
+            CredentialVersion.version > cred.current_version
+        ).order_by(CredentialVersion.version.desc())).first()
+        return CredentialResponse(
+            credential_id=cred.credential_id, issuer_id=cred.issuer_id,
+            current_version=cred.current_version, current_fingerprint=cred.current_fingerprint,
+            current_status=cred.current_status, issuance_status=ver.issuance_status if ver else "PENDING",
+            issuance_tx_hash=ver.issuance_tx_hash if ver else None,
+            created_at=cred.created_at, updated_at=cred.updated_at,
+            pending_version=pending.version if pending else None,
+            operation_id=op.operation_id if op else None,
+            operation_status=op.status if op else None,
+            operation_tx_hash=op.tx_hash if op else None,
+        )
+
+    def _check_record(self, cred, ver, record):
+        expected = dict(fingerprint=ver.fingerprint, issuer_id=cred.issuer_id,
+                        credential_id=cred.credential_id, version=ver.version,
+                        document_digest=ver.document_digest, metadata_digest=ver.metadata_digest,
+                        merkle_root=ver.merkle_root, expires_at=ver.expires_at or 0)
+        if any(record.get(k) != v for k, v in expected.items()):
+            raise AppException("On-chain record does not match the complete expected credential.",
+                               "RECONCILIATION_IDENTITY_MISMATCH", 409)
+        if not record.get("issued_at") or record.get("status") not in {
+            "ACTIVE", "SUSPENDED", "REVOKED", "SUPERSEDED", "ARCHIVED"
+        }:
+            raise AppException("Incomplete authoritative credential record.", "INVALID_CHAIN_RECORD", 503)
+
+    def _confirm(self, cred, ver, op, record, result):
+        self._check_record(cred, ver, record)
+        if op.action in {"ISSUE", "SUPERSEDE"}:
+            ver.issuance_status = "CONFIRMED"
+            ver.issuance_tx_hash = op.tx_hash or ver.issuance_tx_hash
+            ver.block_number = result.get("block_number") or ver.block_number
+            ver.chain_id = blockchain_client.chain_id
+            if ver.version > cred.current_version:
+                old = self.cred_repo.get_version_by_number(cred.credential_id, ver.version - 1)
+                if old:
+                    old.superseded_by_fingerprint = ver.fingerprint
+                cred.current_version = ver.version
+                cred.current_fingerprint = ver.fingerprint
+        if cred.current_version == ver.version:
+            cred.current_status = record["status"]
+        op.status = "CONFIRMED"
+        op.error = None
+        self.cred_repo.record_audit("CREDENTIAL_" + op.action + "_CONFIRMED", "CREDENTIAL",
+                                   cred.credential_id, "SUCCESS", op.operation_id,
+                                   json.dumps({"tx_hash": op.tx_hash, "version": ver.version}))
+        self.db.commit()
+
+    def _execute(self, cred, ver, op):
+        # A known transaction hash is reconciled only; never blindly rebroadcast it.
+        if op.status == "CONFIRMED":
+            return
+        if op.tx_hash:
+            receipt = blockchain_client.get_transaction_receipt(op.tx_hash)
+            if not receipt:
+                op.status = "SUBMITTED"
+                self.db.commit()
+                return
+            if receipt.get("status") == "REVERTED":
+                op.status, op.error = "FAILED", "Transaction reverted on-chain"
+                if op.action in {"ISSUE", "SUPERSEDE"}:
+                    ver.issuance_status = "FAILED"
+                self.db.commit()
+                return
+            record = blockchain_client.get_credential_record_on_chain(ver.fingerprint)
+            if record:
+                self._confirm(cred, ver, op, record, receipt)
+            return
+        if op.action in {"ISSUE", "SUPERSEDE"}:
+            record = blockchain_client.get_credential_record_on_chain(ver.fingerprint)
+            if record and record.get("issued_at"):
+                self._confirm(cred, ver, op, record, {})
+                return
+        if not blockchain_client.can_transact or not blockchain_client.is_contract_ready("credential"):
+            raise AppException("Blockchain is unavailable; no lifecycle change was completed.",
+                               "BLOCKCHAIN_UNAVAILABLE", 503)
+
+        def persist_hash(tx_hash):
+            # Called before broadcasting signed bytes, so a crash cannot lose the hash.
+            op.tx_hash, op.status = tx_hash, "SUBMITTED"
+            if op.action in {"ISSUE", "SUPERSEDE"}:
+                ver.issuance_tx_hash = tx_hash
             self.db.commit()
 
-            # Attempt on-chain anchoring if signer and contract are ready
-            if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
-                anchor_res = blockchain_client.anchor_credential_fingerprint(
-                    credential_id_hex=req.credential_id,
-                    doc_digest_hex=req.document_digest,
-                    meta_digest_hex=req.metadata_digest,
-                    merkle_root_hex=req.merkle_root,
-                    version=req.version,
-                    expires_at=req.expires_at or 0,
-                )
-                if anchor_res.get("status") == "CONFIRMED":
-                    on_chain_fp = anchor_res.get("fingerprint")
-                    on_chain_issuer = anchor_res.get("issuer_id")
-                    if on_chain_fp and version_rec.fingerprint != on_chain_fp:
-                        version_rec.fingerprint = on_chain_fp
-                        credential.current_fingerprint = on_chain_fp
-                    if on_chain_issuer and credential.issuer_id.lower() != on_chain_issuer.lower():
-                        credential.issuer_id = on_chain_issuer
-
-                    version_rec.issuance_status = "CONFIRMED"
-                    version_rec.issuance_tx_hash = anchor_res.get("tx_hash")
-                    version_rec.block_number = anchor_res.get("block_number")
-                    version_rec.chain_id = blockchain_client.chain_id
-                    self.cred_repo.record_audit(
-                        event_type="CREDENTIAL_ANCHORED_ON_CHAIN",
-                        entity_type="CREDENTIAL",
-                        entity_id=req.credential_id,
-                        outcome="SUCCESS",
-                        correlation_id=correlation_id,
-                        details_json=json.dumps({
-                            "fingerprint": version_rec.fingerprint,
-                            "tx_hash": anchor_res.get("tx_hash"),
-                            "block_number": anchor_res.get("block_number"),
-                            "chain_id": blockchain_client.chain_id,
-                        }),
-                    )
-                    self.db.commit()
-                elif anchor_res.get("status") in ("REVERTED", "FAILED"):
-                    version_rec.issuance_status = "FAILED"
-                    version_rec.issuance_tx_hash = anchor_res.get("tx_hash")
-                    self.cred_repo.record_audit(
-                        event_type="CREDENTIAL_ANCHORING_FAILED",
-                        entity_type="CREDENTIAL",
-                        entity_id=req.credential_id,
-                        outcome="FAILURE",
-                        correlation_id=correlation_id,
-                        details_json=json.dumps({
-                            "fingerprint": fingerprint,
-                            "error": anchor_res.get("error"),
-                            "tx_hash": anchor_res.get("tx_hash"),
-                        }),
-                    )
-                    self.db.commit()
-
-            return CredentialResponse(
-                credential_id=credential.credential_id,
-                issuer_id=credential.issuer_id,
-                current_version=credential.current_version,
-                current_fingerprint=credential.current_fingerprint,
-                current_status=credential.current_status,
-                issuance_status=version_rec.issuance_status,
-                issuance_tx_hash=version_rec.issuance_tx_hash,
-                created_at=credential.created_at,
-                updated_at=credential.updated_at,
-            )
+        kwargs = dict(expected_issuer_id=cred.issuer_id, on_broadcast=persist_hash)
+        if op.action in {"ISSUE", "SUPERSEDE"}:
+            kwargs.update(doc_digest_hex=ver.document_digest, meta_digest_hex=ver.metadata_digest,
+                          merkle_root_hex=ver.merkle_root, expires_at=ver.expires_at or 0)
+            if op.action == "ISSUE":
+                result = blockchain_client.anchor_credential_fingerprint(
+                    credential_id_hex=cred.credential_id, version=ver.version, **kwargs)
+            else:
+                old = self.cred_repo.get_version_by_number(cred.credential_id, ver.version - 1)
+                result = blockchain_client.supersede_credential_on_chain(old_fingerprint_hex=old.fingerprint, **kwargs)
         else:
-            # Credential already exists
-            if req.version == existing_cred.current_version:
-                # Idempotent response if exact version exists
-                existing_ver = self.cred_repo.get_version_by_number(req.credential_id, req.version)
-                if existing_ver and existing_ver.fingerprint == fingerprint:
-                    return CredentialResponse(
-                        credential_id=existing_cred.credential_id,
-                        issuer_id=existing_cred.issuer_id,
-                        current_version=existing_cred.current_version,
-                        current_fingerprint=existing_cred.current_fingerprint,
-                        current_status=existing_cred.current_status,
-                        issuance_status=existing_ver.issuance_status,
-                        issuance_tx_hash=existing_ver.issuance_tx_hash,
-                        created_at=existing_cred.created_at,
-                        updated_at=existing_cred.updated_at,
-                    )
-                raise EntityConflictException(f"Version {req.version} of credential '{req.credential_id}' already exists.")
+            kwargs["fingerprint_hex"] = ver.fingerprint
+            if op.action != "REACTIVATE":
+                kwargs["reason_code"] = op.reason_code
+            result = getattr(blockchain_client, op.action.lower() + "_credential_on_chain")(**kwargs)
+        op.tx_hash = result.get("tx_hash") or op.tx_hash
+        if op.action in {"ISSUE", "SUPERSEDE"}:
+            ver.issuance_tx_hash = op.tx_hash
+        if result.get("status") == "CONFIRMED":
+            record = blockchain_client.get_credential_record_on_chain(ver.fingerprint)
+            if record:
+                self._confirm(cred, ver, op, record, result)
+                return
+            # Receipt alone does not establish identity or final lifecycle state.
+            op.status, op.error = "SUBMITTED", "Awaiting authoritative record"
+        elif result.get("status") in {"PENDING", "UNCERTAIN"}:
+            op.status, op.error = "SUBMITTED", "Awaiting transaction confirmation"
+        else:
+            op.status, op.error = "FAILED", str(result.get("error", "Transaction failed"))[:1024]
+            if op.action in {"ISSUE", "SUPERSEDE"}:
+                ver.issuance_status = "FAILED"
+        self.db.commit()
+        if op.status == "FAILED":
+            raise AppException(op.error, "LIFECYCLE_TRANSACTION_FAILED", 502)
 
-            if req.version != existing_cred.current_version + 1:
-                raise AppException(
-                    message=f"Non-sequential version: expected {existing_cred.current_version + 1}, got {req.version}",
-                    error_code="INVALID_VERSION_SEQUENCE",
-                    status_code=400,
-                )
+    def _operation(self, cred, ver, action, reason=1):
+        active = self.db.scalars(select(ChainOperation).where(
+            ChainOperation.credential_id == cred.credential_id,
+            ChainOperation.status.in_(["PREPARED", "SUBMITTED"])
+        )).first()
+        if active:
+            if (active.action, active.version) != (action, ver.version):
+                raise EntityConflictException("Reconcile the pending operation before another lifecycle change.")
+            return active
+        op = ChainOperation(credential_id=cred.credential_id, version=ver.version,
+                            action=action, reason_code=reason, status="PREPARED")
+        self.db.add(op)
+        self.db.commit()
+        return op
 
-            # Ensure new fingerprint is unique
-            existing_fp = self.cred_repo.get_version_by_fingerprint(fingerprint)
-            if existing_fp:
-                raise EntityConflictException(f"Credential fingerprint '{fingerprint}' already exists.")
+    @serialized
+    def create_credential(self, req, principal=None):
+        cred = self.cred_repo.get_by_credential_id(req.credential_id)
+        self._enforce_manage_authorization(principal, cred.issuer_id if cred else req.issuer_id)
+        if cred and cred.issuer_id != req.issuer_id:
+            raise AppException("Cannot add a version to another issuer's credential.", "TENANT_MISMATCH", 403)
+        issuer = self.issuer_repo.get_by_issuer_id(req.issuer_id)
+        if not issuer:
+            raise EntityNotFoundException(f"Issuer '{req.issuer_id}' not found.")
+        if issuer.status != "ACTIVE":
+            raise AppException("Issuer is not active.", "ISSUER_REVOKED" if issuer.status == "REVOKED" else "ISSUER_INACTIVE", 400)
+        fp = compute_composite_fingerprint(req.document_digest, req.metadata_digest, req.merkle_root,
+                                           req.issuer_id, req.credential_id, req.version)
+        previous_key = self.cred_repo.get_version_by_idempotency_key(req.idempotency_key) if req.idempotency_key else None
+        if previous_key and (previous_key.fingerprint != fp or (previous_key.expires_at or 0) != (req.expires_at or 0)):
+            raise EntityConflictException("Idempotency key has already been used for a different credential issuance request.")
+        existing = self.cred_repo.get_version_by_number(req.credential_id, req.version)
+        if existing:
+            if existing.fingerprint != fp or (existing.expires_at or 0) != (req.expires_at or 0):
+                raise EntityConflictException("Credential version already exists with different content or expiry.")
+            return self._response(cred)
+        if not cred and req.version != 1:
+            raise AppException("Initial credential issuance must be version 1.", "INVALID_VERSION", 400)
+        if cred and req.version != cred.current_version + 1:
+            raise AppException("Versions must be sequential.", "INVALID_VERSION_SEQUENCE", 400)
+        if cred:
+            if cred.current_status != "ACTIVE":
+                raise InvalidLifecycleTransitionException("Only a confirmed ACTIVE credential can be superseded.")
+            if self.db.scalars(select(ChainOperation).where(ChainOperation.credential_id == cred.credential_id,
+                    ChainOperation.status.in_(["PREPARED", "SUBMITTED"]))).first():
+                raise EntityConflictException("Reconcile the pending operation first.")
+        else:
+            cred = Credential(credential_id=req.credential_id, issuer_id=req.issuer_id,
+                              current_version=1, current_fingerprint=fp, current_status="PENDING")
+            self.db.add(cred)
+            self.db.flush()
+        ver = CredentialVersion(credential_id=req.credential_id, version=req.version, fingerprint=fp,
+                idempotency_key=req.idempotency_key, document_digest=req.document_digest,
+                metadata_digest=req.metadata_digest, merkle_root=req.merkle_root,
+                expires_at=req.expires_at or 0, issuance_status="PENDING")
+        self.db.add(ver)
+        self.db.commit()
+        op = self._operation(cred, ver, "ISSUE" if req.version == 1 else "SUPERSEDE")
+        if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
+            self._execute(cred, ver, op)
+        return self._response(cred)
 
-            # Supersede old version
-            old_version_rec = self.cred_repo.get_version_by_number(req.credential_id, existing_cred.current_version)
-            if old_version_rec:
-                old_version_rec.superseded_by_fingerprint = fingerprint
+    @serialized
+    def reconcile_and_anchor_credential(self, credential_id, version_number, principal=None):
+        cred = self._credential(credential_id)
+        self._enforce_manage_authorization(principal, cred.issuer_id)
+        ver = self.cred_repo.get_version_by_number(credential_id, version_number)
+        if not ver:
+            raise EntityNotFoundException("Credential version not found.")
+        op = self._latest_operation(credential_id)
+        if not op or op.version != version_number or op.status == "FAILED":
+            op = self._operation(cred, ver, "ISSUE" if version_number == 1 else "SUPERSEDE")
+            # Preserve hashes from pre-operation-table versions during migration.
+            op.tx_hash = ver.issuance_tx_hash
+        if op.status == "CONFIRMED":
+            record = blockchain_client.get_credential_record_on_chain(ver.fingerprint)
+            if not record:
+                raise AppException("Authoritative record unavailable.", "BLOCKCHAIN_UNAVAILABLE", 503)
+            self._confirm(cred, ver, op, record, {})
+        else:
+            self._execute(cred, ver, op)
+        return self._response(cred)
 
-            new_version_rec = CredentialVersion(
-                credential_id=req.credential_id,
-                version=req.version,
-                fingerprint=fingerprint,
-                idempotency_key=req.idempotency_key,
-                document_digest=req.document_digest,
-                metadata_digest=req.metadata_digest,
-                merkle_root=req.merkle_root,
-                expires_at=req.expires_at,
-                issuance_status="PENDING",
-            )
-            existing_cred.current_version = req.version
-            existing_cred.current_fingerprint = fingerprint
-            self.cred_repo.add_version(new_version_rec)
+    @serialized
+    def _lifecycle(self, credential_id, action, principal, reason=1):
+        cred = self._credential(credential_id)
+        self._enforce_manage_authorization(principal, cred.issuer_id)
+        latest = self._latest_operation(credential_id)
+        ver = self.cred_repo.get_version_by_number(credential_id, cred.current_version)
+        if latest and latest.status in {"PREPARED", "SUBMITTED"}:
+            if latest.action != action:
+                raise EntityConflictException("Reconcile the pending operation first.")
+            self._execute(cred, ver, latest)
+            return self._response(cred)
+        allowed = {"SUSPEND": {"ACTIVE"}, "REACTIVATE": {"SUSPENDED"}, "REVOKE": {"ACTIVE", "SUSPENDED"}}
+        if cred.current_status not in allowed[action]:
+            raise InvalidLifecycleTransitionException(f"Cannot {action.lower()} a {cred.current_status} credential.")
+        if not blockchain_client.can_transact or not blockchain_client.is_contract_ready("credential"):
+            raise AppException("Blockchain is unavailable; no lifecycle change was completed.", "BLOCKCHAIN_UNAVAILABLE", 503)
+        op = self._operation(cred, ver, action, reason)
+        self._execute(cred, ver, op)
+        return self._response(cred)
 
-            self.cred_repo.record_audit(
-                event_type="CREDENTIAL_VERSION_SUPERSEDED",
-                entity_type="CREDENTIAL",
-                entity_id=req.credential_id,
-                outcome="SUCCESS",
-                correlation_id=correlation_id,
-                details_json=json.dumps({"new_fingerprint": fingerprint, "version": req.version}),
-            )
-            self.db.commit()
+    def suspend_credential(self, credential_id, reason_code=1, principal=None):
+        return self._lifecycle(credential_id, "SUSPEND", principal, reason_code)
 
-            # Attempt on-chain anchoring if signer and contract are ready
-            if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
-                anchor_res = blockchain_client.anchor_credential_fingerprint(
-                    credential_id_hex=req.credential_id,
-                    doc_digest_hex=req.document_digest,
-                    meta_digest_hex=req.metadata_digest,
-                    merkle_root_hex=req.merkle_root,
-                    version=req.version,
-                    expires_at=req.expires_at or 0,
-                )
-                if anchor_res.get("status") == "CONFIRMED":
-                    on_chain_fp = anchor_res.get("fingerprint")
-                    on_chain_issuer = anchor_res.get("issuer_id")
-                    if on_chain_fp and new_version_rec.fingerprint != on_chain_fp:
-                        new_version_rec.fingerprint = on_chain_fp
-                        existing_cred.current_fingerprint = on_chain_fp
-                    if on_chain_issuer and existing_cred.issuer_id.lower() != on_chain_issuer.lower():
-                        existing_cred.issuer_id = on_chain_issuer
+    def reactivate_credential(self, credential_id, principal=None):
+        return self._lifecycle(credential_id, "REACTIVATE", principal)
 
-                    new_version_rec.issuance_status = "CONFIRMED"
-                    new_version_rec.issuance_tx_hash = anchor_res.get("tx_hash")
-                    new_version_rec.block_number = anchor_res.get("block_number")
-                    new_version_rec.chain_id = blockchain_client.chain_id
-                    self.cred_repo.record_audit(
-                        event_type="CREDENTIAL_ANCHORED_ON_CHAIN",
-                        entity_type="CREDENTIAL",
-                        entity_id=req.credential_id,
-                        outcome="SUCCESS",
-                        correlation_id=correlation_id,
-                        details_json=json.dumps({
-                            "fingerprint": new_version_rec.fingerprint,
-                            "tx_hash": anchor_res.get("tx_hash"),
-                            "block_number": anchor_res.get("block_number"),
-                            "chain_id": blockchain_client.chain_id,
-                        }),
-                    )
-                    self.db.commit()
-                elif anchor_res.get("status") in ("REVERTED", "FAILED"):
-                    new_version_rec.issuance_status = "FAILED"
-                    new_version_rec.issuance_tx_hash = anchor_res.get("tx_hash")
-                    self.cred_repo.record_audit(
-                        event_type="CREDENTIAL_ANCHORING_FAILED",
-                        entity_type="CREDENTIAL",
-                        entity_id=req.credential_id,
-                        outcome="FAILURE",
-                        correlation_id=correlation_id,
-                        details_json=json.dumps({
-                            "fingerprint": fingerprint,
-                            "error": anchor_res.get("error"),
-                            "tx_hash": anchor_res.get("tx_hash"),
-                        }),
-                    )
-                    self.db.commit()
-
-            return CredentialResponse(
-                credential_id=existing_cred.credential_id,
-                issuer_id=existing_cred.issuer_id,
-                current_version=existing_cred.current_version,
-                current_fingerprint=existing_cred.current_fingerprint,
-                current_status=existing_cred.current_status,
-                issuance_status=new_version_rec.issuance_status,
-                issuance_tx_hash=new_version_rec.issuance_tx_hash,
-                created_at=existing_cred.created_at,
-                updated_at=existing_cred.updated_at,
-            )
+    def revoke_credential(self, credential_id, reason_code=1, principal=None):
+        return self._lifecycle(credential_id, "REVOKE", principal, reason_code)
 
     def get_credential(self, credential_id: str, principal: Optional[AuthenticatedPrincipal] = None) -> CredentialResponse:
         cred = self.cred_repo.get_by_credential_id(credential_id)
         if not cred:
             raise EntityNotFoundException(f"Credential with ID '{credential_id}' was not found.")
 
-        if principal and not principal.is_admin() and not principal.has_role("verifier"):
-            if principal.has_role("issuer") and principal.issuer_id:
-                if cred.issuer_id.lower() != principal.issuer_id.lower():
-                    raise AppException(
-                        message="Forbidden: Access to another institution's credential is denied.",
-                        error_code="TENANT_MISMATCH",
-                        status_code=403,
-                    )
+        self._enforce_read_authorization(principal, cred.issuer_id)
 
-        current_ver = self.cred_repo.get_version_by_number(credential_id, cred.current_version)
-        issuance_st = current_ver.issuance_status if current_ver else "UNKNOWN"
-        issuance_tx = current_ver.issuance_tx_hash if current_ver else None
-
-        return CredentialResponse(
-            credential_id=cred.credential_id,
-            issuer_id=cred.issuer_id,
-            current_version=cred.current_version,
-            current_fingerprint=cred.current_fingerprint,
-            current_status=cred.current_status,
-            issuance_status=issuance_st,
-            issuance_tx_hash=issuance_tx,
-            created_at=cred.created_at,
-            updated_at=cred.updated_at,
-        )
+        return self._response(cred)
 
     def list_credentials(
         self,
@@ -377,10 +376,28 @@ class CredentialService:
         offset: int = 0,
         principal: Optional[AuthenticatedPrincipal] = None,
     ) -> List[CredentialResponse]:
-        issuer_filter = None
-        if principal and not principal.is_admin() and not principal.has_role("verifier"):
-            if principal.has_role("issuer") and principal.issuer_id:
-                issuer_filter = principal.issuer_id
+        if not principal:
+            raise AppException(
+                message="Authorization required. Provide 'Authorization: Bearer <token>' header.",
+                error_code="UNAUTHORIZED",
+                status_code=401,
+            )
+        if principal.is_admin() or principal.has_role("verifier"):
+            issuer_filter = None
+        elif principal.has_role("issuer"):
+            if not principal.issuer_id:
+                raise AppException(
+                    message="Forbidden: Authenticated token is not bound to any institutional issuer authority.",
+                    error_code="UNBOUND_ISSUER_IDENTITY",
+                    status_code=403,
+                )
+            issuer_filter = principal.issuer_id
+        else:
+            raise AppException(
+                message="Forbidden: Insufficient permissions to list credentials.",
+                error_code="INSUFFICIENT_PERMISSIONS",
+                status_code=403,
+            )
 
         creds = self.cred_repo.list_credentials(limit=limit, offset=offset, issuer_id=issuer_filter)
         results = []
@@ -406,14 +423,7 @@ class CredentialService:
         if not cred:
             raise EntityNotFoundException(f"Credential with ID '{credential_id}' was not found.")
 
-        if principal and not principal.is_admin() and not principal.has_role("verifier"):
-            if principal.has_role("issuer") and principal.issuer_id:
-                if cred.issuer_id.lower() != principal.issuer_id.lower():
-                    raise AppException(
-                        message="Forbidden: Access to another institution's credential is denied.",
-                        error_code="TENANT_MISMATCH",
-                        status_code=403,
-                    )
+        self._enforce_read_authorization(principal, cred.issuer_id)
 
         versions = self.cred_repo.get_all_versions(credential_id)
         return [
@@ -512,7 +522,7 @@ class CredentialService:
             fingerprint=fingerprint,
             database_found=True,
             blockchain_available=True,
-            is_valid=is_valid_on_chain,
+            is_valid=bool(is_valid_on_chain and digest_match and not is_expired),
             lifecycle_status=chain_res.get("stored_status", lifecycle_st),
             is_expired=is_expired or (chain_code == "EXPIRED"),
             digest_match=digest_match and (chain_code != "HASH_MISMATCH"),
@@ -520,249 +530,4 @@ class CredentialService:
             details=f"Blockchain verified: status is {chain_res.get('stored_status')}, verification code is {chain_code}.",
             checked_at=checked_at,
         )
-
-    def reconcile_and_anchor_credential(
-        self,
-        credential_id: str,
-        version_number: int,
-        principal: Optional[AuthenticatedPrincipal] = None,
-    ) -> CredentialResponse:
-        """
-        Idempotent reconciliation and retry operation for pending credentials.
-        1. Validates principal permissions and tenant boundary.
-        2. Queries on-chain storage to detect if transaction previously confirmed on-chain.
-        3. If not yet confirmed on-chain and signer is active, submits anchoring transaction.
-        4. Synchronizes database state with verified on-chain confirmation.
-        """
-        cred = self.cred_repo.get_by_credential_id(credential_id)
-        if not cred:
-            raise EntityNotFoundException(f"Credential with ID '{credential_id}' was not found.")
-
-        if principal and not principal.is_admin():
-            if principal.has_role("issuer") and principal.issuer_id:
-                if cred.issuer_id.lower() != principal.issuer_id.lower():
-                    raise AppException(
-                        message="Forbidden: Access to another institution's credential is denied.",
-                        error_code="TENANT_MISMATCH",
-                        status_code=403,
-                    )
-
-        version_rec = self.cred_repo.get_version_by_number(credential_id, version_number)
-        if not version_rec:
-            raise EntityNotFoundException(f"Version {version_number} of credential '{credential_id}' not found.")
-
-        # Check on-chain record first (idempotent reconciliation)
-        on_chain_rec = blockchain_client.get_credential_record_on_chain(version_rec.fingerprint)
-        if not on_chain_rec or on_chain_rec.get("issued_at", 0) == 0:
-            # Check by version using credential's issuer_id
-            on_chain_rec = blockchain_client.get_credential_record_by_version(
-                cred.issuer_id, credential_id, version_number
-            )
-            if not on_chain_rec or on_chain_rec.get("issued_at", 0) == 0:
-                # If signer is configured with an accredited issuer, check using signer's issuer
-                signer_issuer = blockchain_client.get_signer_issuer_id()
-                if signer_issuer and signer_issuer.lower() != cred.issuer_id.lower():
-                    on_chain_rec = blockchain_client.get_credential_record_by_version(
-                        signer_issuer, credential_id, version_number
-                    )
-
-        if on_chain_rec and on_chain_rec.get("issued_at", 0) > 0:
-            on_chain_fp = on_chain_rec.get("fingerprint")
-            on_chain_issuer = on_chain_rec.get("issuer_id")
-
-            # Update database to reflect authoritative on-chain state
-            if on_chain_fp and version_rec.fingerprint != on_chain_fp:
-                version_rec.fingerprint = on_chain_fp
-
-            if cred.current_version == version_number and on_chain_fp:
-                cred.current_fingerprint = on_chain_fp
-
-            if on_chain_issuer and cred.issuer_id.lower() != on_chain_issuer.lower():
-                cred.issuer_id = on_chain_issuer
-
-            if version_rec.issuance_status != "CONFIRMED":
-                version_rec.issuance_status = "CONFIRMED"
-            version_rec.chain_id = blockchain_client.chain_id
-
-            self.cred_repo.record_audit(
-                event_type="CREDENTIAL_RECONCILED_ON_CHAIN",
-                entity_type="CREDENTIAL",
-                entity_id=credential_id,
-                outcome="SUCCESS",
-                correlation_id=str(uuid.uuid4()),
-                details_json=json.dumps({
-                    "fingerprint": version_rec.fingerprint,
-                    "issuer_id": cred.issuer_id,
-                    "on_chain": on_chain_rec,
-                }),
-            )
-            self.db.commit()
-            return self.get_credential(credential_id, principal=principal)
-
-        # Attempt anchoring if signer and contract are ready
-        if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
-            res = blockchain_client.anchor_credential_fingerprint(
-                credential_id_hex=credential_id,
-                doc_digest_hex=version_rec.document_digest,
-                meta_digest_hex=version_rec.metadata_digest,
-                merkle_root_hex=version_rec.merkle_root,
-                version=version_number,
-                expires_at=version_rec.expires_at or 0,
-            )
-            if res.get("status") == "CONFIRMED":
-                on_chain_fp = res.get("fingerprint")
-                on_chain_issuer = res.get("issuer_id")
-                if on_chain_fp and version_rec.fingerprint != on_chain_fp:
-                    version_rec.fingerprint = on_chain_fp
-                if cred.current_version == version_number and on_chain_fp:
-                    cred.current_fingerprint = on_chain_fp
-                if on_chain_issuer and cred.issuer_id.lower() != on_chain_issuer.lower():
-                    cred.issuer_id = on_chain_issuer
-
-                version_rec.issuance_status = "CONFIRMED"
-                version_rec.issuance_tx_hash = res.get("tx_hash")
-                version_rec.block_number = res.get("block_number")
-                version_rec.chain_id = blockchain_client.chain_id
-                self.cred_repo.record_audit(
-                    event_type="CREDENTIAL_ANCHORED_ON_CHAIN",
-                    entity_type="CREDENTIAL",
-                    entity_id=credential_id,
-                    outcome="SUCCESS",
-                    correlation_id=str(uuid.uuid4()),
-                    details_json=json.dumps({
-                        "fingerprint": version_rec.fingerprint,
-                        "tx_hash": res.get("tx_hash"),
-                        "block_number": res.get("block_number"),
-                        "chain_id": blockchain_client.chain_id,
-                    }),
-                )
-                self.db.commit()
-            elif res.get("status") in ("REVERTED", "FAILED"):
-                version_rec.issuance_status = "FAILED"
-                version_rec.issuance_tx_hash = res.get("tx_hash")
-                self.cred_repo.record_audit(
-                    event_type="CREDENTIAL_ANCHORING_FAILED",
-                    entity_type="CREDENTIAL",
-                    entity_id=credential_id,
-                    outcome="FAILURE",
-                    correlation_id=str(uuid.uuid4()),
-                    details_json=json.dumps({"fingerprint": version_rec.fingerprint, "error": res.get("error")}),
-                )
-                self.db.commit()
-
-        return self.get_credential(credential_id, principal=principal)
-
-    def suspend_credential(
-        self,
-        credential_id: str,
-        reason_code: int = 1,
-        principal: Optional[AuthenticatedPrincipal] = None,
-    ) -> CredentialResponse:
-        """
-        Transitions credential status from ACTIVE to SUSPENDED.
-        Submits suspendCredential on-chain transaction if connected to EVM smart contracts.
-        """
-        cred = self.cred_repo.get_by_credential_id(credential_id)
-        if not cred:
-            raise EntityNotFoundException(f"Credential with ID '{credential_id}' was not found.")
-
-        if principal and not principal.is_admin():
-            if principal.has_role("issuer") and principal.issuer_id:
-                if cred.issuer_id.lower() != principal.issuer_id.lower():
-                    raise AppException(
-                        message="Forbidden: Access to another institution's credential is denied.",
-                        error_code="TENANT_MISMATCH",
-                        status_code=403,
-                    )
-
-        if cred.current_status != "ACTIVE":
-            raise InvalidLifecycleTransitionException(
-                f"Cannot suspend credential in '{cred.current_status}' status. Only ACTIVE credentials may be suspended."
-            )
-
-        cred.current_status = "SUSPENDED"
-        self.cred_repo.record_audit(
-            event_type="CREDENTIAL_SUSPENDED",
-            entity_type="CREDENTIAL",
-            entity_id=credential_id,
-            outcome="SUCCESS",
-            correlation_id=str(uuid.uuid4()),
-            details_json=json.dumps({"fingerprint": cred.current_fingerprint, "reason_code": reason_code}),
-        )
-        self.db.commit()
-
-        # Submit on-chain suspension if connected
-        if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
-            res = blockchain_client.suspend_credential_on_chain(
-                fingerprint_hex=cred.current_fingerprint,
-                reason_code=reason_code,
-            )
-            if res.get("status") == "CONFIRMED":
-                self.cred_repo.record_audit(
-                    event_type="CREDENTIAL_SUSPENSION_ANCHORED_ON_CHAIN",
-                    entity_type="CREDENTIAL",
-                    entity_id=credential_id,
-                    outcome="SUCCESS",
-                    correlation_id=str(uuid.uuid4()),
-                    details_json=json.dumps({"tx_hash": res.get("tx_hash"), "block_number": res.get("block_number")}),
-                )
-                self.db.commit()
-
-        return self.get_credential(credential_id, principal=principal)
-
-    def reactivate_credential(
-        self,
-        credential_id: str,
-        principal: Optional[AuthenticatedPrincipal] = None,
-    ) -> CredentialResponse:
-        """
-        Transitions credential status from SUSPENDED back to ACTIVE.
-        Submits reactivateCredential on-chain transaction if connected to EVM smart contracts.
-        """
-        cred = self.cred_repo.get_by_credential_id(credential_id)
-        if not cred:
-            raise EntityNotFoundException(f"Credential with ID '{credential_id}' was not found.")
-
-        if principal and not principal.is_admin():
-            if principal.has_role("issuer") and principal.issuer_id:
-                if cred.issuer_id.lower() != principal.issuer_id.lower():
-                    raise AppException(
-                        message="Forbidden: Access to another institution's credential is denied.",
-                        error_code="TENANT_MISMATCH",
-                        status_code=403,
-                    )
-
-        if cred.current_status != "SUSPENDED":
-            raise InvalidLifecycleTransitionException(
-                f"Cannot reactivate credential in '{cred.current_status}' status. Only SUSPENDED credentials may be reactivated."
-            )
-
-        cred.current_status = "ACTIVE"
-        self.cred_repo.record_audit(
-            event_type="CREDENTIAL_REACTIVATED",
-            entity_type="CREDENTIAL",
-            entity_id=credential_id,
-            outcome="SUCCESS",
-            correlation_id=str(uuid.uuid4()),
-            details_json=json.dumps({"fingerprint": cred.current_fingerprint}),
-        )
-        self.db.commit()
-
-        # Submit on-chain reactivation if connected
-        if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
-            res = blockchain_client.reactivate_credential_on_chain(
-                fingerprint_hex=cred.current_fingerprint,
-            )
-            if res.get("status") == "CONFIRMED":
-                self.cred_repo.record_audit(
-                    event_type="CREDENTIAL_REACTIVATION_ANCHORED_ON_CHAIN",
-                    entity_type="CREDENTIAL",
-                    entity_id=credential_id,
-                    outcome="SUCCESS",
-                    correlation_id=str(uuid.uuid4()),
-                    details_json=json.dumps({"tx_hash": res.get("tx_hash"), "block_number": res.get("block_number")}),
-                )
-                self.db.commit()
-
-        return self.get_credential(credential_id, principal=principal)
 

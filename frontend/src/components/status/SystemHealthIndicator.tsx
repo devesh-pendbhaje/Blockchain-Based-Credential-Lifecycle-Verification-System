@@ -36,7 +36,7 @@ export const SystemHealthIndicator: React.FC<SystemHealthIndicatorProps> = ({ mi
             <Database className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-xs text-slate-400 font-medium">PostgreSQL Persistence</div>
+            <div className="text-xs text-slate-400 font-medium">Database Persistence</div>
             <div className="mt-0.5">
               <StatusBadge
                 status={readiness?.database === 'connected' ? 'CONNECTED' : 'DISCONNECTED'}

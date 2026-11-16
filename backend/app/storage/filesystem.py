@@ -49,14 +49,14 @@ class EncryptedFilesystemStorage(CertificateStorageAdapter):
 
         return target_file
 
-    def store(self, storage_id: str, data: bytes, metadata: Dict[str, Any]) -> str:
+    def store(self, storage_id: str, data: bytes, metadata: Dict[str, Any], overwrite: bool = False) -> str:
         """
         Atomically writes encrypted payload to disk.
-        Prevents partial-write corruption and accidental overwrite.
+        Prevents partial-write corruption and accidental overwrite unless explicitly requested.
         """
         target_path = self._resolve_safe_path(storage_id)
 
-        if target_path.exists():
+        if target_path.exists() and not overwrite:
             raise AppException(
                 message=f"Storage object '{storage_id}' already exists and cannot be overwritten.",
                 error_code="OBJECT_ALREADY_EXISTS",
@@ -71,7 +71,7 @@ class EncryptedFilesystemStorage(CertificateStorageAdapter):
         bundle_bytes = json.dumps(bundle, indent=2).encode("utf-8")
 
         # Atomic write pattern: write to temporary file, fsync, then replace
-        temp_path = self.root_path / f".{storage_id}.tmp"
+        temp_path = self.root_path / f".{storage_id}.{__import__('uuid').uuid4().hex}.tmp"
         try:
             with open(temp_path, "wb") as f:
                 f.write(bundle_bytes)

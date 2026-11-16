@@ -1,4 +1,5 @@
 from typing import Dict, List, Optional, Any
+import time
 from sqlalchemy.orm import Session
 from app.crypto.merkle import (
     SaltedAttributeMerkleTree,
@@ -48,6 +49,8 @@ class SelectiveDisclosureService:
                 status_code=400,
             )
 
+        if set(attributes) != set(salts) or any(not salt for salt in salts.values()):
+            raise AppException("Original salts are required for every attribute.", "MISSING_ORIGINAL_SALTS", 400)
         # 1. Construct Merkle tree from full attributes and salts
         tree = SaltedAttributeMerkleTree(attributes, salts)
 
@@ -93,7 +96,7 @@ class SelectiveDisclosureService:
 
     def verify_presentation(
         self,
-        presentation: Dict[str, Any],
+        presentation: Any,
         verifier_session_id: str,
         require_current_version: bool = False,
         verifier_principal: Optional[str] = None,
@@ -105,17 +108,25 @@ class SelectiveDisclosureService:
         3. Verifies composite fingerprint binding.
         4. Verifies database presence, status, and version recency.
         5. Verifies on-chain issuer accreditation, credential status, and expiration if blockchain is reachable.
+        Fails closed: overall_valid is True ONLY when all authoritative gates pass.
         """
-        fingerprint = presentation.get("credential_fingerprint")
-        credential_id = presentation.get("credential_id")
-        version = presentation.get("version")
-        merkle_root = presentation.get("merkle_root")
-        doc_digest = presentation.get("document_digest")
-        meta_digest = presentation.get("metadata_digest")
-        issuer_id = presentation.get("issuer_id")
-        disclosed_claims = presentation.get("disclosed_claims", [])
-        challenge_id = presentation.get("challenge_id")
-        challenge_nonce = presentation.get("challenge_nonce")
+        if hasattr(presentation, "model_dump"):
+            pres_dict = presentation.model_dump()
+        elif isinstance(presentation, dict):
+            pres_dict = presentation
+        else:
+            pres_dict = dict(presentation)
+
+        fingerprint = pres_dict.get("credential_fingerprint")
+        credential_id = pres_dict.get("credential_id")
+        version = pres_dict.get("version")
+        merkle_root = pres_dict.get("merkle_root")
+        doc_digest = pres_dict.get("document_digest")
+        meta_digest = pres_dict.get("metadata_digest")
+        issuer_id = pres_dict.get("issuer_id")
+        disclosed_claims = pres_dict.get("disclosed_claims", [])
+        challenge_id = pres_dict.get("challenge_id")
+        challenge_nonce = pres_dict.get("challenge_nonce")
 
         if not fingerprint or not merkle_root or not disclosed_claims:
             raise AppException(
@@ -124,7 +135,7 @@ class SelectiveDisclosureService:
                 status_code=400,
             )
 
-        # Step 1: Challenge validation and atomic consumption (if challenge provided)
+        # Step 1: Challenge validation and atomic single-use consumption
         challenge_verified = False
         if challenge_id and challenge_nonce:
             self.challenge_svc.validate_and_consume_challenge(
@@ -139,10 +150,17 @@ class SelectiveDisclosureService:
         # Step 2: Cryptographic Merkle proof verification for each disclosed claim
         verified_claims = {}
         for claim in disclosed_claims:
-            key = claim.get("key")
-            value = claim.get("value")
-            salt = claim.get("salt")
-            proof = claim.get("proof", [])
+            if hasattr(claim, "model_dump"):
+                c_dict = claim.model_dump()
+            elif isinstance(claim, dict):
+                c_dict = claim
+            else:
+                c_dict = dict(claim)
+
+            key = c_dict.get("key")
+            value = c_dict.get("value")
+            salt = c_dict.get("salt")
+            proof = c_dict.get("proof", [])
 
             if not key or value is None or not salt:
                 raise AppException(
@@ -163,9 +181,11 @@ class SelectiveDisclosureService:
 
             verified_claims[key] = value
 
+        selective_disclosure_valid = bool(len(verified_claims) > 0)
+
         # Step 3: Verify composite fingerprint consistency if full digests provided
         fingerprint_verified = False
-        if doc_digest and meta_digest and issuer_id and credential_id and version:
+        if doc_digest and meta_digest and issuer_id and credential_id and version is not None:
             expected_fp = compute_composite_fingerprint(
                 document_digest=doc_digest,
                 metadata_digest=meta_digest,
@@ -192,7 +212,7 @@ class SelectiveDisclosureService:
 
         db_valid = False
         is_current_version = False
-        db_status = "UNKNOWN"
+        db_status = "NOT_FOUND"
 
         if parent_cred:
             db_status = parent_cred.current_status
@@ -206,15 +226,20 @@ class SelectiveDisclosureService:
                     status_code=409,
                 )
 
-        # Step 5: On-chain authoritative verification (if blockchain reachable)
+        # Step 5: On-chain authoritative verification
         is_conn = blockchain_client.is_connected()
+        is_contract_ok = blockchain_client.is_contract_ready("credential")
         on_chain_res = {
             "is_connected": is_conn,
             "on_chain_valid": False,
-            "code": "RPC_DISCONNECTED" if not is_conn else "NOT_VERIFIED",
+            "code": "RPC_DISCONNECTED" if not is_conn else ("CONTRACT_NOT_READY" if not is_contract_ok else "NOT_VERIFIED"),
+            "stored_status": "UNKNOWN",
+            "issuer_active": False,
+            "expires_at": 0,
+            "authoritative_verification_available": False,
         }
 
-        if is_conn and doc_digest and meta_digest and merkle_root:
+        if is_conn and is_contract_ok and doc_digest and meta_digest and merkle_root:
             chain_check = blockchain_client.verify_credential_on_chain(
                 fingerprint_hex=fingerprint,
                 doc_digest_hex=doc_digest,
@@ -222,22 +247,55 @@ class SelectiveDisclosureService:
                 merkle_root_hex=merkle_root,
             )
             if chain_check:
-                on_chain_res["on_chain_valid"] = chain_check.get("is_valid", False)
-                on_chain_res["code"] = chain_check.get("code_name", "UNKNOWN")
-                on_chain_res["issuer_active"] = chain_check.get("is_issuer_active", False)
+                on_chain_res["on_chain_valid"] = bool(chain_check.get("is_valid", False))
+                on_chain_res["code"] = chain_check.get("code", "UNKNOWN")
+                on_chain_res["stored_status"] = chain_check.get("stored_status", "UNKNOWN")
+                on_chain_res["issuer_active"] = bool(chain_check.get("is_issuer_active", False))
+                on_chain_res["expires_at"] = int(chain_check.get("expires_at", 0))
+                on_chain_res["authoritative_verification_available"] = bool(
+                    chain_check.get("code") != "UNAVAILABLE" and chain_check.get("network_ok", True)
+                )
 
-        # Distinguish selective disclosure proof validity from overall credential validity:
-        # Merkle proof validity alone DOES NOT equal overall validity!
-        overall_valid = (
-            bool(verified_claims)
-            and (not (challenge_id and challenge_nonce) or challenge_verified)
-            and (not parent_cred or db_valid)
-            and (not is_conn or on_chain_res["on_chain_valid"])
+        # Check expiration dynamically
+        now_ts = int(time.time())
+        is_expired = False
+        expires_at = on_chain_res.get("expires_at", 0)
+        if expires_at and expires_at > 0:
+            is_expired = now_ts >= expires_at
+        elif version_rec and version_rec.expires_at and version_rec.expires_at > 0:
+            is_expired = now_ts >= version_rec.expires_at
+
+        if is_expired:
+            on_chain_res["on_chain_valid"] = False
+            on_chain_res["code"] = "EXPIRED"
+
+        # FAIL CLOSED: overall_valid strictly requires:
+        # 1. Valid Merkle proofs (selective_disclosure_valid)
+        # 2. Verified fingerprint binding (fingerprint_verified)
+        # 3. Verified verifier challenge (challenge_verified)
+        # 4. Known active credential in DB (parent_cred and db_valid)
+        # 5. Authoritative on-chain verification valid and active with active issuer
+        # 6. Unexpired and un-superseded
+        overall_valid = bool(
+            selective_disclosure_valid
+            and fingerprint_verified
+            and challenge_verified
+            and parent_cred is not None
+            and db_valid
+            and is_conn
+            and is_contract_ok
+            and on_chain_res.get("authoritative_verification_available") is True
+            and on_chain_res.get("on_chain_valid", False) is True
+            and on_chain_res.get("code") == "VALID"
+            and on_chain_res.get("stored_status") == "ACTIVE"
+            and on_chain_res.get("issuer_active") is True
+            and not is_expired
+            and (not require_current_version or is_current_version)
         )
 
         return {
             "overall_valid": overall_valid,
-            "selective_disclosure_valid": True,
+            "selective_disclosure_valid": selective_disclosure_valid,
             "disclosed_attributes": verified_claims,
             "challenge_verified": challenge_verified,
             "fingerprint_verified": fingerprint_verified,

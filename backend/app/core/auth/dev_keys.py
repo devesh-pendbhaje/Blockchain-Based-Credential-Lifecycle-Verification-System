@@ -39,11 +39,11 @@ def get_or_create_dev_keypair() -> Tuple[str, str]:
         if _cached_private_pem and _cached_public_pem:
             return _cached_private_pem, _cached_public_pem
 
-        if settings.is_production:
+        if not settings.is_local_dev:
             raise AppException(
-                message="Local development cryptographic keys are strictly prohibited in production mode.",
+                message="Local development cryptographic keys are strictly prohibited unless AUTH_MODE is explicitly set to 'local_dev'.",
                 error_code="DEV_KEYS_PROHIBITED",
-                status_code=500,
+                status_code=500 if settings.is_production else 403,
             )
 
         # 1. If explicit environment keys provided, prioritize them
@@ -124,10 +124,10 @@ def get_or_create_dev_keypair() -> Tuple[str, str]:
 
 def init_dev_auth_if_needed() -> None:
     """
-    Initializes dev authentication settings if running in development mode.
-    Does nothing in production.
+    Initializes dev authentication settings if running in explicit local_dev mode.
+    Does nothing in production or standard oidc mode.
     """
-    if not settings.is_production and not settings.AUTH_DEV_PUBLIC_KEY:
+    if settings.is_local_dev and not settings.AUTH_DEV_PUBLIC_KEY:
         try:
             get_or_create_dev_keypair()
         except Exception as exc:
@@ -145,11 +145,11 @@ def sign_dev_jwt(
 ) -> str:
     """
     Signs a valid, cryptographically verifiable RS256 JWT using the local dev keypair.
-    Strictly forbidden in production mode.
+    Strictly forbidden unless in explicit local_dev mode.
     """
-    if settings.is_production:
+    if not settings.is_local_dev:
         raise AppException(
-            message="Development token issuance is strictly prohibited in production mode.",
+            message="Development token issuance is strictly prohibited unless AUTH_MODE is explicitly set to 'local_dev'.",
             error_code="DEV_AUTH_FORBIDDEN",
             status_code=403,
         )

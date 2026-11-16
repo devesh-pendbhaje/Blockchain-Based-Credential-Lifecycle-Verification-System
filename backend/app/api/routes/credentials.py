@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from app.db.session import get_db
@@ -8,6 +8,7 @@ from app.schemas.credential import (
     CredentialResponse,
     CredentialVersionResponse,
     VerificationResponse,
+    LifecycleActionRequest,
 )
 from app.schemas.common import validate_bytes32_hex
 
@@ -30,7 +31,7 @@ def create_credential(
     """
     verify_issuer_tenant_ownership(principal, req.issuer_id)
     service = CredentialService(db)
-    return service.create_credential(req)
+    return service.create_credential(req, principal=principal)
 
 
 @router.get("", response_model=List[CredentialResponse], summary="List Issued Credentials")
@@ -127,3 +128,52 @@ def reconcile_or_anchor_credential(
     valid_id = validate_bytes32_hex(credential_id, allow_zero=False)
     service = CredentialService(db)
     return service.reconcile_and_anchor_credential(valid_id, version, principal=principal)
+
+
+@router.post("/{credential_id}/suspend", response_model=CredentialResponse, summary="Suspend Credential")
+def suspend_credential(
+    credential_id: str,
+    req: Optional[LifecycleActionRequest] = None,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_issuer),
+):
+    """
+    Suspends an active credential with reason code.
+    Requires an authorized issuer or admin principal.
+    """
+    valid_id = validate_bytes32_hex(credential_id, allow_zero=False)
+    reason = req.reason_code if req else 1
+    service = CredentialService(db)
+    return service.suspend_credential(valid_id, reason_code=reason, principal=principal)
+
+
+@router.post("/{credential_id}/reactivate", response_model=CredentialResponse, summary="Reactivate Suspended Credential")
+def reactivate_credential(
+    credential_id: str,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_issuer),
+):
+    """
+    Reactivates a suspended credential back to active status.
+    Requires an authorized issuer or admin principal.
+    """
+    valid_id = validate_bytes32_hex(credential_id, allow_zero=False)
+    service = CredentialService(db)
+    return service.reactivate_credential(valid_id, principal=principal)
+
+
+@router.post("/{credential_id}/revoke", response_model=CredentialResponse, summary="Revoke Credential")
+def revoke_credential(
+    credential_id: str,
+    req: Optional[LifecycleActionRequest] = None,
+    db: Session = Depends(get_db),
+    principal: AuthenticatedPrincipal = Depends(require_issuer),
+):
+    """
+    Permanently revokes a credential (terminal state).
+    Requires an authorized issuer or admin principal.
+    """
+    valid_id = validate_bytes32_hex(credential_id, allow_zero=False)
+    reason = req.reason_code if req else 1
+    service = CredentialService(db)
+    return service.revoke_credential(valid_id, reason_code=reason, principal=principal)

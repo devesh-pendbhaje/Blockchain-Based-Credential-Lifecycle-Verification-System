@@ -23,7 +23,7 @@ def get_auth_config():
     return AuthConfigResponse(
         auth_mode=settings.AUTH_MODE,
         environment=settings.ENVIRONMENT,
-        dev_mode_available=not settings.is_production,
+        dev_mode_available=settings.is_local_dev,
         issuer_url=settings.OIDC_ISSUER_URL,
         audience=settings.OIDC_AUDIENCE,
         allowed_algorithms=settings.OIDC_ALLOWED_ALGORITHMS,
@@ -34,11 +34,11 @@ def get_auth_config():
 def generate_dev_token(req: DevTokenRequest):
     """
     Issues a cryptographically signed RS256 JWT for local evaluation and regression testing.
-    Strictly forbidden in production environments (returns HTTP 403).
+    Strictly forbidden unless running in explicit local_dev mode (returns HTTP 403).
     """
-    if settings.is_production:
+    if not settings.is_local_dev:
         raise AppException(
-            message="Development token issuance is strictly prohibited in production mode.",
+            message="Development token issuance is strictly prohibited unless AUTH_MODE is explicitly set to 'local_dev'.",
             error_code="DEV_AUTH_FORBIDDEN",
             status_code=403,
         )
@@ -62,6 +62,12 @@ def generate_dev_token(req: DevTokenRequest):
         issuer_id = None
         verifier_id = req.verifier_id or "verifier-portal-auditor"
         email = req.email or "verifier@auditor.example.org"
+    elif req.persona == "holder":
+        sub = req.sub or "holder-student"
+        roles = ["holder"]
+        issuer_id = None
+        verifier_id = None
+        email = req.email or "holder@example.edu"
     else:  # custom
         sub = req.sub or "custom-user-01"
         roles = req.roles or ["user"]

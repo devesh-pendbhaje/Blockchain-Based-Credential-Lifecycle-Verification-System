@@ -4,6 +4,7 @@ from app.models.credential_version import CredentialVersion
 from app.models.audit_event import AuditEvent
 from app.models.stored_certificate import StoredCertificate
 from app.models.verifier_challenge import VerifierChallenge
+from app.models.chain_operation import ChainOperation
 
 __all__ = [
     "Issuer",
@@ -12,4 +13,5 @@ __all__ = [
     "AuditEvent",
     "StoredCertificate",
     "VerifierChallenge",
+    "ChainOperation",
 ]

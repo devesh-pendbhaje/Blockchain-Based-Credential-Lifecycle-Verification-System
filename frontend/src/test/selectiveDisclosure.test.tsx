@@ -1,107 +1,173 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import apiClient from '@/services/apiClient';
 import { presentationApi } from '@/services/presentationApi';
+import { SelectiveDisclosurePage } from '@/pages/SelectiveDisclosurePage';
+import { holderPackages } from '@/services/holderPackages';
+import { CredentialPackage } from '@/types/credential';
 
-describe('Selective Disclosure & Replay-Protected Challenge Protocol', () => {
-  it('omits concealed sensitive claims from generated presentation', async () => {
-    const fullAttributes = {
+describe('Selective Disclosure Protocol & UI Verification', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    holderPackages.clear();
+  });
+
+  const samplePackage: CredentialPackage = {
+    credential_id: '0x2222222222222222222222222222222222222222222222222222222222222222',
+    issuer_id: '0x3333333333333333333333333333333333333333333333333333333333333333',
+    version: 1,
+    fingerprint: '0x1111111111111111111111111111111111111111111111111111111111111111',
+    document_digest: '0x5555555555555555555555555555555555555555555555555555555555555555',
+    metadata_digest: '0x6666666666666666666666666666666666666666666666666666666666666666',
+    merkle_root: '0x4444444444444444444444444444444444444444444444444444444444444444',
+    attributes: {
       fullName: 'Jane Doe',
       degree: 'B.S. Computer Science',
       graduationYear: '2026',
       gpa: '3.94',
-      socialSecurityNumber: 'XXX-XX-9876', // Sensitive PII
+      socialSecurityNumber: 'XXX-XX-9876',
+    },
+    salts: {
+      fullName: '0x0101010101010101010101010101010101010101010101010101010101010101',
+      degree: '0x0202020202020202020202020202020202020202020202020202020202020202',
+      graduationYear: '0x0303030303030303030303030303030303030303030303030303030303030303',
+      gpa: '0x0404040404040404040404040404040404040404040404040404040404040404',
+      socialSecurityNumber: '0x0505050505050505050505050505050505050505050505050505050505050505',
+    },
+    created_at: new Date().toISOString(),
+  };
+
+  it('presentationApi.generatePresentation invokes backend with exact typed payload', async () => {
+    const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
+      data: {
+        credential_fingerprint: samplePackage.fingerprint,
+        credential_id: samplePackage.credential_id,
+        version: 1,
+        issuer_id: samplePackage.issuer_id,
+        merkle_root: samplePackage.merkle_root,
+        document_digest: samplePackage.document_digest,
+        metadata_digest: samplePackage.metadata_digest,
+        disclosed_claims: [
+          {
+            key: 'degree',
+            value: 'B.S. Computer Science',
+            salt: samplePackage.salts.degree,
+            leaf_hash: '0x8888',
+            proof: ['0x9999'],
+          },
+        ],
+      },
+    });
+
+    const requestPayload = {
+      credential_id: samplePackage.credential_id,
+      version: 1,
+      attributes: samplePackage.attributes,
+      salts: samplePackage.salts,
+      disclosed_keys: ['degree'],
+      document_digest: samplePackage.document_digest,
+      metadata_digest: samplePackage.metadata_digest,
+      issuer_id: samplePackage.issuer_id,
+      challenge_id: 'ch-test-123',
+      challenge_nonce: '0xnonce123',
     };
 
-    const disclosedKeys = ['degree', 'graduationYear'];
+    const res = await presentationApi.generatePresentation(requestPayload);
 
-    vi.spyOn(presentationApi, 'generatePresentation').mockResolvedValueOnce({
-      credential_fingerprint: '0x1111111111111111111111111111111111111111111111111111111111111111',
-      credential_id: '0x2222222222222222222222222222222222222222222222222222222222222222',
-      version: 1,
-      issuer_id: '0x3333333333333333333333333333333333333333333333333333333333333333',
-      merkle_root: '0x4444444444444444444444444444444444444444444444444444444444444444',
-      document_digest: '0x5555555555555555555555555555555555555555555555555555555555555555',
-      metadata_digest: '0x6666666666666666666666666666666666666666666666666666666666666666',
-      disclosed_claims: [
-        {
-          key: 'degree',
-          value: 'B.S. Computer Science',
-          salt: '0x7777777777777777777777777777777777777777777777777777777777777777',
-          leaf_hash: '0x8888888888888888888888888888888888888888888888888888888888888888',
-          proof: ['0x9999999999999999999999999999999999999999999999999999999999999999'],
-        },
-        {
-          key: 'graduationYear',
-          value: '2026',
-          salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          leaf_hash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          proof: ['0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'],
-        },
-      ],
-      challenge_id: 'ch-uuid-1234',
-      challenge_nonce: '0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
-    });
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/presentations/generate', requestPayload);
+    expect(res.credential_id).toBe(samplePackage.credential_id);
+    expect(res.disclosed_claims).toHaveLength(1);
+    expect(res.disclosed_claims[0].key).toBe('degree');
+  });
 
-    const result = await presentationApi.generatePresentation({
-      credential_id: '0x2222222222222222222222222222222222222222222222222222222222222222',
-      version: 1,
-      attributes: fullAttributes,
-      salts: {
-        degree: '0x7777777777777777777777777777777777777777777777777777777777777777',
-        graduationYear: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  it('presentationApi.verifyPresentation correctly serializes request to backend endpoint', async () => {
+    const postSpy = vi.spyOn(apiClient, 'post').mockResolvedValueOnce({
+      data: {
+        overall_valid: true,
+        selective_disclosure_valid: true,
+        disclosed_attributes: { degree: 'B.S. Computer Science' },
+        challenge_verified: true,
+        fingerprint_verified: true,
+        database_status: 'ACTIVE',
+        is_current_version: true,
+        blockchain_verification: {
+          available: true,
+          authoritative_verification_available: true,
+          on_chain_valid: true,
+          code: 'VALID',
+        },
+        privacy_notice: 'Standard disclosure.',
       },
-      disclosed_keys: disclosedKeys,
-      document_digest: '0x5555555555555555555555555555555555555555555555555555555555555555',
-      metadata_digest: '0x6666666666666666666666666666666666666666666666666666666666666666',
-      issuer_id: '0x3333333333333333333333333333333333333333333333333333333333333333',
     });
 
-    // Verify revealed keys
-    const revealedKeys = result.disclosed_claims.map((c) => c.key);
-    expect(revealedKeys).toContain('degree');
-    expect(revealedKeys).toContain('graduationYear');
+    const verifyReq = {
+      presentation: { credential_id: samplePackage.credential_id },
+      verifier_session_id: 'session-hr-auditor-2026',
+      require_current_version: true,
+    };
 
-    // Verify concealed keys are ABSENT from presentation payload
-    expect(revealedKeys).not.toContain('socialSecurityNumber');
-    expect(revealedKeys).not.toContain('gpa');
-    expect(revealedKeys).not.toContain('fullName');
+    const res = await presentationApi.verifyPresentation(verifyReq);
+
+    expect(postSpy).toHaveBeenCalledWith('/api/v1/presentations/verify', verifyReq);
+    expect(res.overall_valid).toBe(true);
+    expect(res.blockchain_verification.code).toBe('VALID');
   });
 
-  it('handles atomic single-use challenge consumption and replay rejection (HTTP 409)', async () => {
-    // Second presentation submission with already-consumed nonce
-    vi.spyOn(presentationApi, 'verifyPresentation').mockRejectedValueOnce({
-      type: 'HTTP_ERROR',
-      statusCode: 409,
-      errorCode: 'CHALLENGE_REPLAY_DETECTED',
-      message: 'The verifier challenge nonce has already been consumed or is invalid. Presentation rejected.',
-    });
+  it('renders attributes and allows toggling disclosure in Step 2', async () => {
+    holderPackages.add(samplePackage);
+    render(
+      <MemoryRouter initialEntries={['/presentations']}>
+        <SelectiveDisclosurePage />
+      </MemoryRouter>
+    );
 
-    await expect(
-      presentationApi.verifyPresentation({
-        presentation: {},
-        verifier_session_id: 'session-hr-auditor-2026',
-      })
-    ).rejects.toMatchObject({
-      statusCode: 409,
-      errorCode: 'CHALLENGE_REPLAY_DETECTED',
-    });
+    // Switch to Step 2 Tab
+    const step2Tab = screen.getByText(/2. Holder presentation/i);
+    fireEvent.click(step2Tab);
+
+    expect(screen.getByText('socialSecurityNumber')).toBeInTheDocument();
+    const degree = screen.getByRole('checkbox', {name: /degree/});
+    expect(degree).not.toBeChecked();
+    fireEvent.click(degree);
+    expect(degree).toBeChecked();
+    expect(screen.getByRole('checkbox', {name: /socialSecurityNumber/})).not.toBeChecked();
+    expect(window.history.state || {}).not.toHaveProperty('credentialPackage');
+
   });
 
-  it('handles expired verifier challenges (HTTP 410)', async () => {
-    vi.spyOn(presentationApi, 'verifyPresentation').mockRejectedValueOnce({
-      type: 'HTTP_ERROR',
-      statusCode: 410,
-      errorCode: 'CHALLENGE_EXPIRED',
-      message: 'The verifier challenge nonce has expired. Please request a new challenge.',
+  it('requires an imported presentation before verification', async () => {
+    vi.spyOn(presentationApi, 'verifyPresentation').mockResolvedValueOnce({
+      overall_valid: false,
+      selective_disclosure_valid: true,
+      disclosed_attributes: { degree: 'B.S. Computer Science' },
+      challenge_verified: true,
+      fingerprint_verified: true,
+      database_status: 'ACTIVE',
+      is_current_version: true,
+      blockchain_verification: {
+        available: false,
+        authoritative_verification_available: false,
+        is_connected: false,
+        code: 'UNAVAILABLE',
+        on_chain_valid: false,
+      },
+      privacy_notice: 'Offline warning',
     });
 
-    await expect(
-      presentationApi.verifyPresentation({
-        presentation: {},
-        verifier_session_id: 'session-hr-auditor-2026',
-      })
-    ).rejects.toMatchObject({
-      statusCode: 410,
-      errorCode: 'CHALLENGE_EXPIRED',
-    });
+    holderPackages.add(samplePackage);
+    render(
+      <MemoryRouter initialEntries={['/presentations']}>
+        <SelectiveDisclosurePage />
+      </MemoryRouter>
+    );
+
+    // Advance to Step 3
+    const step3Tab = screen.getByText(/3. Verify presentation/i);
+    fireEvent.click(step3Tab);
+
+    // Since presentation is null initially, we verify button is disabled until presentation exists
+    const verifyButton = screen.getByRole('button', { name: /^Verify presentation$/i });
+    expect(verifyButton).toBeDisabled();
   });
 });

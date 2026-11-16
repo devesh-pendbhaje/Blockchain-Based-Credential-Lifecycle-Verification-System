@@ -19,7 +19,7 @@ export interface AuthConfig {
 }
 
 export interface DevTokenParams {
-  persona: 'admin' | 'issuer' | 'verifier' | 'custom';
+  persona: 'admin' | 'issuer' | 'verifier' | 'holder' | 'custom';
   roles?: string[];
   issuer_id?: string;
   verifier_id?: string;

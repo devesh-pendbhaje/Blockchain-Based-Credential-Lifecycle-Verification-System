@@ -38,6 +38,19 @@ export interface PresentationVerifyRequest {
   require_current_version?: boolean;
 }
 
+export interface BlockchainVerificationDetails {
+  available?: boolean;
+  authoritative_verification_available?: boolean;
+  is_connected?: boolean;
+  on_chain_valid?: boolean;
+  code?: string;
+  stored_status?: string;
+  issuer_active?: boolean;
+  expires_at?: number;
+  reason?: string;
+  [key: string]: unknown;
+}
+
 export interface PresentationVerifyResponse {
   overall_valid: boolean;
   selective_disclosure_valid: boolean;
@@ -46,11 +59,6 @@ export interface PresentationVerifyResponse {
   fingerprint_verified: boolean;
   database_status: string;
   is_current_version: boolean;
-  blockchain_verification: {
-    available: boolean;
-    result?: unknown;
-    reason?: string;
-    [key: string]: unknown;
-  };
+  blockchain_verification: BlockchainVerificationDetails;
   privacy_notice: string;
 }

@@ -10,7 +10,7 @@ class CertificateStorageAdapter(ABC):
     """
 
     @abstractmethod
-    def store(self, storage_id: str, data: bytes, metadata: Dict[str, Any]) -> str:
+    def store(self, storage_id: str, data: bytes, metadata: Dict[str, Any], overwrite: bool = False) -> str:
         """
         Stores data payload associated with a unique storage_id and metadata.
         Returns the persistent object key/URI.

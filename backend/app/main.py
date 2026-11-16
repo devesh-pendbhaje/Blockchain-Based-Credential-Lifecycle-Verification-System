@@ -60,7 +60,7 @@ async def app_exception_handler(request: Request, exc: AppException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.info(f"Validation error: {exc.errors()}")
+    logger.info("Request validation failed (input values omitted)")
     # Sanitize validation error details to avoid returning raw internal structures
     sanitized_errors = []
     for err in exc.errors():
