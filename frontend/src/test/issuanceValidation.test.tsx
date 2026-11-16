@@ -13,6 +13,9 @@ describe('Issuance wizard validation', () => {
   it('reveals a missing issuer on review and allows confirmation after correction without losing digests', async () => {
     render(<MemoryRouter><CredentialIssuancePage /></MemoryRouter>);
     const hash = '0x' + '12'.repeat(32);
+    // Only credential IDs can be randomly generated in the identifiers step.
+    expect(screen.getAllByRole('button', { name: 'Random' })).toHaveLength(1);
+    expect(screen.getByText(/Creating a database profile alone does not authorize issuance/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Step 2 Document/ }));
     fireEvent.change(screen.getByPlaceholderText(/Auto-populated upon certificate upload/), { target: { value: hash } });
     fireEvent.click(screen.getByRole('button', { name: /Step 3 Metadata/ }));

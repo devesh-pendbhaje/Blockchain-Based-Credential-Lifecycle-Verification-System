@@ -1,0 +1,278 @@
+{
+  "checks": [
+    "Seeded issuer exists in database and is active on-chain",
+    "Valid PNG certificate uploaded; storage metadata matches its digest",
+    "Missing issuer rejected (422); database-only issuer rejected by chain signer (502); recovered using seeded issuer and fresh credential ID",
+    "Upload, canonicalize, salt and issue: confirmed on real Hardhat",
+    "Idempotent issuance, holder isolation and public verification",
+    "Selective disclosure with original salts; replay rejected",
+    "Suspension blocks both verification paths; reactivation restores validity",
+    "Real supersession invalidates old version; revocation is terminal",
+    "Lifecycle history retains both issued versions",
+    "Fresh active credential left for professor demo; mined transaction receipt status is 1"
+  ],
+  "demo_credential_id": "0xe8a96c3b62a1bf1d5e39d1ffda7bbe7692fe92cf04e4391aa7f0cddf5ee9ea73",
+  "demo_fingerprint": "0x8418d5c08aaebbd975b60e4f8de4a1c959d1404b9becfd9ab3376e0adaa8fd04",
+  "issuer_id": "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "completed_at_utc": "2026-11-16T20:52:54.181622+05:30",
+  "chain_id": 31337,
+  "storage_id": "2d45f92f-c54a-4522-86f3-292f2fd06d7c",
+  "document_digest": "0xbdba0edca37c28d08d52c70685702fb72e150177da26c071e297b1054359b5a7",
+  "lifecycle_credential_id": "0xdf97b1a899fc6d428889cc086e0f3613906522601bda74de6e9f6caa33aa545f",
+  "revoked_fingerprint": "0x646bdb9a570b235e32e8f1f31b04b25b7508e20d3cddf55ddd30c0c14c82256d",
+  "superseded_fingerprint": "0xe61231267d71b6445aed5e531cf2e573fcae32a96af104c9d0cef4def5fb7f93",
+  "demo_transaction_hash": "0xdc9307773e160a00c0543eb2f95264019a68b4a57a904271433bccb16bbeffd9",
+  "receipt_status": 1,
+  "receipt_block": 15,
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/auth/dev-token",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/auth/dev-token",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/auth/dev-token",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/auth/dev-token",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/issuers/0x0000000000000000000000000000000000000000000000000000000000000001",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/issuers/0x0000000000000000000000000000000000000000000000000000000000000001/status",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/documents/upload",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/documents/2d45f92f-c54a-4522-86f3-292f2fd06d7c/metadata",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/documents/canonical-metadata",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/merkle/build-tree",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/credentials",
+      "expected_status": 422,
+      "actual_status": 422
+    },
+    {
+      "method": "POST",
+      "path": "/issuers",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/credentials",
+      "expected_status": 502,
+      "actual_status": 502
+    },
+    {
+      "method": "POST",
+      "path": "/credentials",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/credentials",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/credentials",
+      "expected_status": 403,
+      "actual_status": 403
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/fingerprint/0xe61231267d71b6445aed5e531cf2e573fcae32a96af104c9d0cef4def5fb7f93/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/challenges",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/generate",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/verify",
+      "expected_status": 409,
+      "actual_status": 409
+    },
+    {
+      "method": "POST",
+      "path": "/credentials/0xdf97b1a899fc6d428889cc086e0f3613906522601bda74de6e9f6caa33aa545f/suspend",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/fingerprint/0xe61231267d71b6445aed5e531cf2e573fcae32a96af104c9d0cef4def5fb7f93/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/challenges",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/generate",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/credentials/0xdf97b1a899fc6d428889cc086e0f3613906522601bda74de6e9f6caa33aa545f/reactivate",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/fingerprint/0xe61231267d71b6445aed5e531cf2e573fcae32a96af104c9d0cef4def5fb7f93/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/credentials",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/fingerprint/0xe61231267d71b6445aed5e531cf2e573fcae32a96af104c9d0cef4def5fb7f93/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/challenges",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/generate",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/presentations/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/credentials/0xdf97b1a899fc6d428889cc086e0f3613906522601bda74de6e9f6caa33aa545f/revoke",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/fingerprint/0x646bdb9a570b235e32e8f1f31b04b25b7508e20d3cddf55ddd30c0c14c82256d/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/credentials/0xdf97b1a899fc6d428889cc086e0f3613906522601bda74de6e9f6caa33aa545f/reactivate",
+      "expected_status": 400,
+      "actual_status": 400
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/0xdf97b1a899fc6d428889cc086e0f3613906522601bda74de6e9f6caa33aa545f/versions",
+      "expected_status": 200,
+      "actual_status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/credentials",
+      "expected_status": 201,
+      "actual_status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/credentials/fingerprint/0x8418d5c08aaebbd975b60e4f8de4a1c959d1404b9becfd9ab3376e0adaa8fd04/verify",
+      "expected_status": 200,
+      "actual_status": 200
+    }
+  ],
+  "browser_credential_id": "0x95027ae2998e90c19a721b7d7de546892920557a9abab492ae67af0923c2ef73",
+  "browser_fingerprint": "0x2998b724eeca915fbfa0a861588ca8b0738bc6e3b4263398eaccb863c693d36e",
+  "browser_checks": [
+    "Wizard upload, metadata, Merkle tree and issuance CONFIRMED",
+    "Encrypted package exported and imported as Holder",
+    "Wallet verification VALID",
+    "QR pass rendered and public verification link VALID without sign-in"
+  ],
+  "regression_tests": {
+    "total": 227,
+    "contracts": 72,
+    "frontend_build": "passed",
+    "frontend": 37,
+    "backend": 118
+  }
+}

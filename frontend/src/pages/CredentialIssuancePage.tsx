@@ -549,14 +549,13 @@ export const CredentialIssuancePage: React.FC = () => {
                   <FormField
                     label="Issuing Authority ID (32-byte Hex)"
                     required
-                    description="Enter an existing registered issuer ID. Administrators must choose the issuer explicitly; signing in as an issuer fills its ID automatically."
+                    description="Use the existing issuer ID authorized for the blockchain signer. Creating a database profile alone does not authorize issuance. Administrators must choose the issuer explicitly; signing in as an issuer fills its ID automatically."
                     error={errors.issuer_id?.message}
                   >
                     <Bytes32Input
                       value={issuerIdVal}
                       onChange={(val) => setValue('issuer_id', val, { shouldValidate: true })}
                       placeholder="0x2222... (64 hex characters)"
-                      allowGenerate
                     />
                   </FormField>
                 </div>
