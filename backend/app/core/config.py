@@ -1,6 +1,6 @@
 import os
 from typing import List, Union, Any, Annotated, ClassVar
-from pydantic import AnyHttpUrl, field_validator, model_validator
+from pydantic import AnyHttpUrl, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
 
 
@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     ISSUER_REGISTRY_ADDRESS: str = ""
     CREDENTIAL_REGISTRY_ADDRESS: str = ""
     BLOCKCHAIN_SIGNER_PRIVATE_KEY: Union[str, None] = None
+    # JSON object: issuer ID -> signing key. Never expose this mapping through APIs.
+    BLOCKCHAIN_ISSUER_PRIVATE_KEYS: dict[str, SecretStr] = {}
     BLOCKCHAIN_TIMEOUT_SECONDS: float = 10.0
     CONFIRMATION_BLOCKS: int = 1
 

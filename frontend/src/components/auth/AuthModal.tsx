@@ -16,6 +16,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [isLoadingPersona, setIsLoadingPersona] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [issuerId, setIssuerId] = useState('');
 
   useEffect(() => {
     if (isOpen) {
@@ -36,7 +37,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     clearError();
 
     try {
-      const resp = await authApi.getDevToken({ persona: role });
+      const selectedIssuer = issuerId.trim();
+      if (role === 'issuer' && selectedIssuer && !/^0x[0-9a-fA-F]{64}$/.test(selectedIssuer)) {
+        throw new Error('Enter the university’s 0x-prefixed, 64-hex-character Issuer ID.');
+      }
+      const resp = await authApi.getDevToken({ persona: role,
+        ...(role === 'issuer' && selectedIssuer ? {issuer_id: selectedIssuer.toLowerCase()} : {}) });
       login(resp.access_token);
       onClose();
     } catch (err: unknown) {
@@ -197,6 +203,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   </span>
                 </button>
 
+                <label className="text-xs text-slate-300">University Issuer ID (local demo)
+                  <input aria-label="University Issuer ID (local demo)" value={issuerId} onChange={e => setIssuerId(e.target.value)}
+                    placeholder="Leave blank for Local Demo University" className="block mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 font-mono" />
+                </label>
                 <button
                   type="button"
                   disabled={isLoadingPersona !== null}

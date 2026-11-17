@@ -18,6 +18,13 @@ from app.core.auth.dependencies import get_current_principal, require_admin
 router = APIRouter(prefix="/issuers", tags=["issuers"])
 
 
+@router.post('/{issuer_id}/activate-local', summary='Activate a university on local Hardhat')
+def activate_local_issuer(issuer_id: str, db: Session = Depends(get_db),
+                          principal: AuthenticatedPrincipal = Depends(require_admin)):
+    """Admin-only local onboarding; generates a distinct encrypted signer for this university."""
+    return IssuerService(db).activate_local_issuer(validate_bytes32_hex(issuer_id, allow_zero=False))
+
+
 @router.post("", response_model=IssuerResponse, status_code=status.HTTP_201_CREATED, summary="Create Issuer Record")
 def create_issuer(
     req: IssuerCreateRequest,

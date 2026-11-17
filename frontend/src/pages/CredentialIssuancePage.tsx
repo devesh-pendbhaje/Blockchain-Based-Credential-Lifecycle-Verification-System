@@ -1,6 +1,6 @@
 import { holderPackages, encryptPackage, downloadText } from '@/services/holderPackages';
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm, FieldErrors } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -45,6 +45,7 @@ import { MerkleBuildTreeResponse } from '@/types/merkle';
 import { AppError } from '@/types/api';
 
 export const CredentialIssuancePage: React.FC = () => {
+  const [searchParams] = useSearchParams();
   // Issuance Wizard Steps
   const [packagePassphrase, setPackagePassphrase] = useState('');
   const [exportError, setExportError] = useState('');
@@ -310,12 +311,14 @@ export const CredentialIssuancePage: React.FC = () => {
     finally {setIsSubmitting(false);}
   };
   useEffect(() => {
-    if (user?.issuerId) setValue('issuer_id', user.issuerId);
+    const selectedIssuer = searchParams.get('issuer');
+    if (isAdmin && selectedIssuer && /^0x[0-9a-fA-F]{64}$/.test(selectedIssuer)) setValue('issuer_id', selectedIssuer.toLowerCase());
+    else if (user?.issuerId) setValue('issuer_id', user.issuerId);
     if (!getValues('credential_id')) {
       const bytes = crypto.getRandomValues(new Uint8Array(32));
       setValue('credential_id', '0x' + Array.from(bytes, b => b.toString(16).padStart(2,'0')).join(''));
     }
-  }, [user?.issuerId]);
+  }, [user?.issuerId, isAdmin, searchParams]);
   useEffect(() => tokenStore.subscribe(() => {
     setMerkleResult(null); setIssuanceResult(null); setIssuedPackage(null);
     setCommittedAttributes({}); setPackagePassphrase(''); setAttributeEntries([]);

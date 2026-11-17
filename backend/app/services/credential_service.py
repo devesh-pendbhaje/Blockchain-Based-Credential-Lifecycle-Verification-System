@@ -26,6 +26,7 @@ from app.core.exceptions import (
     AppException,
 )
 from app.blockchain.client import blockchain_client
+from app.core.config import settings
 
 
 from app.core.auth.models import AuthenticatedPrincipal
@@ -203,7 +204,7 @@ class CredentialService:
             if record and record.get("issued_at"):
                 self._confirm(cred, ver, op, record, {})
                 return
-        if not blockchain_client.can_transact or not blockchain_client.is_contract_ready("credential"):
+        if not (blockchain_client.can_transact or settings.BLOCKCHAIN_ISSUER_PRIVATE_KEYS) or not blockchain_client.is_contract_ready("credential"):
             raise AppException("Blockchain is unavailable; no lifecycle change was completed.",
                                "BLOCKCHAIN_UNAVAILABLE", 503)
 
@@ -307,7 +308,7 @@ class CredentialService:
         self.db.add(ver)
         self.db.commit()
         op = self._operation(cred, ver, "ISSUE" if req.version == 1 else "SUPERSEDE")
-        if blockchain_client.can_transact and blockchain_client.is_contract_ready("credential"):
+        if (blockchain_client.can_transact or settings.BLOCKCHAIN_ISSUER_PRIVATE_KEYS) and blockchain_client.is_contract_ready("credential"):
             self._execute(cred, ver, op)
         return self._response(cred)
 
@@ -346,7 +347,7 @@ class CredentialService:
         allowed = {"SUSPEND": {"ACTIVE"}, "REACTIVATE": {"SUSPENDED"}, "REVOKE": {"ACTIVE", "SUSPENDED"}}
         if cred.current_status not in allowed[action]:
             raise InvalidLifecycleTransitionException(f"Cannot {action.lower()} a {cred.current_status} credential.")
-        if not blockchain_client.can_transact or not blockchain_client.is_contract_ready("credential"):
+        if not (blockchain_client.can_transact or settings.BLOCKCHAIN_ISSUER_PRIVATE_KEYS) or not blockchain_client.is_contract_ready("credential"):
             raise AppException("Blockchain is unavailable; no lifecycle change was completed.", "BLOCKCHAIN_UNAVAILABLE", 503)
         op = self._operation(cred, ver, action, reason)
         self._execute(cred, ver, op)

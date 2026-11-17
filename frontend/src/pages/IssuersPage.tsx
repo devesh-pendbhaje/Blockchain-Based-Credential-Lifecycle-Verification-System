@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
@@ -39,6 +40,8 @@ export const IssuersPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createSuccess, setCreateSuccess] = useState<IssuerResponse | null>(null);
   const [createError, setCreateError] = useState<AppError | null>(null);
+  const [isActivating, setIsActivating] = useState(false);
+  const [activationAddress, setActivationAddress] = useState('');
 
   // In-session tracked issuers for quick convenience
   const [sessionIssuers, setSessionIssuers] = useState<IssuerResponse[]>([]);
@@ -83,6 +86,7 @@ export const IssuersPage: React.FC = () => {
     setSearchError(null);
     setIssuerData(null);
     setIssuerStatusData(null);
+    setActivationAddress('');
 
     try {
       const [details, statusResp] = await Promise.all([
@@ -120,6 +124,8 @@ export const IssuersPage: React.FC = () => {
       });
 
       setCreateSuccess(created);
+      setActivationAddress('');
+      setIssuerStatusData(null);
       setIssuerData(created);
       setSessionIssuers((prev) => [created, ...prev.filter((i) => i.issuer_id !== created.issuer_id)]);
       reset();
@@ -355,6 +361,21 @@ export const IssuersPage: React.FC = () => {
               </div>
 
               {/* Status Comparison Grid (Database vs On-Chain) */}
+              {isAdmin && <div className="p-4 rounded-lg border border-brand-800 space-y-3 text-sm">
+                <p>Local demo: activate this university to register its own blockchain signer. Existing university signers remain unchanged. This action is restricted to local Hardhat.</p>
+                <button disabled={isActivating} className="px-4 py-2 rounded bg-brand-600 disabled:opacity-50" onClick={async () => {
+                  setIsActivating(true); setSearchError(null); setActivationAddress('');
+                  try {
+                    const result = await issuerApi.activateLocalIssuer(issuerData.issuer_id);
+                    await handleLookup(issuerData.issuer_id);
+                    setActivationAddress(result.signing_address);
+                  } catch (error) { setSearchError(error as AppError); }
+                  finally { setIsActivating(false); }
+                }}>{isActivating ? 'Activating university…' : 'Activate local university'}</button>
+                {activationAddress && <p role="status" className="break-all text-emerald-300">University ready to issue. Signing address: {activationAddress}</p>}
+              </div>}
+              {(isAdmin || user?.issuerId === issuerData.issuer_id) && issuerStatusData?.is_on_chain_active &&
+                <Link className="inline-block px-4 py-2 rounded bg-brand-600 text-sm" to={`/credentials/issue?issuer=${encodeURIComponent(issuerData.issuer_id)}`}>Issue credential for this university</Link>}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="p-4 bg-slate-950/70 border border-slate-800/80 rounded-lg space-y-2">
                   <span className="text-xs text-slate-400 font-medium">PostgreSQL Database Status</span>

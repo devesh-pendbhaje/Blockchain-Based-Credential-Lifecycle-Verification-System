@@ -98,6 +98,8 @@ class BlockchainClient:
         self._last_conn_check_time: float = 0.0
         self._cached_connected: bool = False
         self._cached_chain_id: Optional[int] = None
+        from threading import RLock
+        self._tx_lock = RLock()
 
         self._init_signer()
         self._initialize()
@@ -470,6 +472,18 @@ class BlockchainClient:
 
     def _credential_transaction(self, function_name, args, expected_issuer_id, on_broadcast=None):
         """One signing worker. Persist the signed hash BEFORE any network send."""
+        if not getattr(self, '_issuer_routed', False):
+            from copy import copy
+            from app.blockchain.issuer_signers import get_account
+            account = get_account(self, expected_issuer_id)
+            if account:
+                # A request-scoped copy avoids swapping the global signer during concurrent requests.
+                routed = copy(self)
+                routed.signer_account = account
+                routed.signer_address = account.address
+                routed.can_transact = True
+                routed._issuer_routed = True
+                return routed._credential_transaction(function_name, args, expected_issuer_id, on_broadcast)
         from threading import RLock
         if not self.can_transact:
             return {"status": "UNAVAILABLE", "success": False, "error": "SIGNER_NOT_CONFIGURED"}
